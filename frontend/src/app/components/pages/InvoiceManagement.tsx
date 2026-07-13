@@ -1,10 +1,21 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search, Plus, Printer, Mail, Download, Eye, MoreHorizontal } from "lucide-react";
-import { invoices, projects, formatCurrency, formatCurrencyFull, getStatusBadge } from "../../data/mockData";
+import { formatCurrency, formatCurrencyFull, getStatusBadge } from "../../data/mockData";
 
 export function InvoiceManagement() {
-  const [selectedInvoice, setSelectedInvoice] = useState(invoices[0]);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
   const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    fetch('http://localhost:5000/api/invoices')
+      .then(res => res.json())
+      .then(data => {
+        setInvoices(data);
+        if(data.length > 0) setSelectedInvoice(data[0]);
+      })
+      .catch(err => console.error(err));
+  }, []);
 
   const filtered = invoices.filter((inv) =>
     inv.id.toLowerCase().includes(search.toLowerCase()) ||
@@ -16,7 +27,9 @@ export function InvoiceManagement() {
   const totalPending = invoices.filter((i) => i.status === "pending").reduce((s, i) => s + i.amount, 0);
   const totalOverdue = invoices.filter((i) => i.status === "overdue").reduce((s, i) => s + i.amount, 0);
 
-  const badge = getStatusBadge(selectedInvoice.status);
+  const badge = selectedInvoice ? getStatusBadge(selectedInvoice.status) : { color: '', label: '' };
+
+  if(!selectedInvoice) return <div className="p-10 text-center">Loading invoices...</div>;
 
   return (
     <div className="space-y-5" style={{ fontFamily: "Inter, sans-serif" }}>

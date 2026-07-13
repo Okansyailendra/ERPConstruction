@@ -30,13 +30,10 @@ export function useProjects() {
   const [projects, setProjects] = useState<ProjectData[]>([]);
 
   useEffect(() => {
-    const stored = localStorage.getItem('erp_projects');
-    if (stored) {
-      setProjects(JSON.parse(stored));
-    } else {
-      setProjects(initialMockProjects);
-      localStorage.setItem('erp_projects', JSON.stringify(initialMockProjects));
-    }
+    fetch('http://localhost:5000/api/projects')
+      .then(res => res.json())
+      .then(data => setProjects(data))
+      .catch(err => console.error('Failed to fetch projects', err));
   }, []);
 
   const addProject = (newProject: Omit<ProjectData, 'id'>) => {
