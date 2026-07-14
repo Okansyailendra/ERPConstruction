@@ -13,6 +13,8 @@ export function MasterMaterial() {
   const [materialToDelete, setMaterialToDelete] = useState<any>(null);
   const [materialToEdit, setMaterialToEdit] = useState<any>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const perPage = 10;
 
   useEffect(() => {
     fetch('http://localhost:5000/api/materials')
@@ -161,18 +163,19 @@ export function MasterMaterial() {
     const file = e.target.files?.[0];
     if (file) {
       alert(`Berhasil mengimpor file: ${file.name}`);
+      setFormErrors({});
       e.target.value = '';
     }
   };
 
-  const filtered = materialsList.filter((m) => {
-    const matchSearch =
-      m.name.toLowerCase().includes(search.toLowerCase()) ||
-      m.code.toLowerCase().includes(search.toLowerCase()) ||
-      m.supplier.toLowerCase().includes(search.toLowerCase());
-    const matchCat = category === "All" || m.category === category;
-    return matchSearch && matchCat;
+  const filtered = materialsList.filter((mat) => {
+    const matchSearch = mat.code?.toLowerCase().includes(search.toLowerCase()) || mat.name?.toLowerCase().includes(search.toLowerCase()) || mat.supplier?.toLowerCase().includes(search.toLowerCase());
+    const matchCategory = category === "All" || mat.category === category;
+    return matchSearch && matchCategory;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+  const paginated = filtered.slice((page - 1) * perPage, page * perPage);
 
   return (
     <div className="space-y-5" style={{ fontFamily: "Inter, sans-serif" }}>
@@ -227,7 +230,7 @@ export function MasterMaterial() {
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               placeholder="Cari kode, nama, atau supplier..."
               className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -236,7 +239,7 @@ export function MasterMaterial() {
             {CATEGORIES.map((cat) => (
               <button
                 key={cat}
-                onClick={() => setCategory(cat)}
+                onClick={() => { setCategory(cat); setPage(1); }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   category === cat ? "bg-blue-600 text-white" : "text-gray-500 hover:bg-gray-100 border border-gray-200"
                 }`}
@@ -265,7 +268,7 @@ export function MasterMaterial() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((mat) => {
+              {paginated.map((mat) => {
                 const badge = getStatusBadge(mat.status);
                 return (
                   <tr key={mat.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
@@ -315,13 +318,35 @@ export function MasterMaterial() {
         </div>
 
         <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
-          <p className="text-xs text-gray-500">Menampilkan {filtered.length} dari {materialsList.length} material</p>
-          <div className="flex gap-1">
-            {[1, 2, 3].map((p) => (
-              <button key={p} className={`w-7 h-7 rounded-lg text-xs border ${p === 1 ? "bg-blue-600 text-white border-blue-600" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+          <p className="text-xs text-gray-500">
+            Menampilkan {Math.min((page - 1) * perPage + 1, filtered.length)}–{Math.min(page * perPage, filtered.length)} dari {filtered.length} material
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(Math.max(1, page - 1))}
+              disabled={page === 1}
+              className="w-7 h-7 flex items-center justify-center rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-gray-50 text-gray-600"
+            >
+              &lt;
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPage(p)}
+                className={`w-7 h-7 rounded-lg text-xs border ${
+                  p === page ? "bg-blue-600 text-white border-blue-600" : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                }`}
+              >
                 {p}
               </button>
             ))}
+            <button
+              onClick={() => setPage(Math.min(totalPages, page + 1))}
+              disabled={page === totalPages}
+              className="w-7 h-7 flex items-center justify-center rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-gray-50 text-gray-600"
+            >
+              &gt;
+            </button>
           </div>
         </div>
       </div>

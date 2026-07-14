@@ -83,9 +83,6 @@ export function ProjectList() {
             {ALL_STATUS.map((s) => <option key={s}>{s === "All" ? "All Status" : s}</option>)}
           </select>
 
-          <button className="flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">
-            <Filter size={14} /> Filter
-          </button>
         </div>
       </div>
 

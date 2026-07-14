@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 require('dotenv').config();
 const crypto = require('crypto');
 const { sendResetEmail } = require('./mailer');
@@ -11,15 +14,41 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Serve static uploads
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Multer Config
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const dir = './uploads';
+    if (!fs.existsSync(dir)){
+        fs.mkdirSync(dir);
+    }
+    cb(null, dir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'photo-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage: storage });
+
 // Auth endpoint
 app.post('/api/login', async (req, res) => {
+  console.log('Login attempt for:', req.body.username);
   const { username, password } = req.body;
   
   try {
     const [rows] = await db.query(
-      'SELECT u.*, r.role_name FROM users u JOIN roles r ON u.role_id = r.id WHERE u.email = ? OR u.username = ?',
-      [username, username]
+      `SELECT u.*, r.name as role_name 
+       FROM users u 
+       LEFT JOIN model_has_roles mhr ON u.id = mhr.model_id 
+       LEFT JOIN roles r ON mhr.role_id = r.id 
+       WHERE u.email = ?`,
+      [username]
     );
+
+    console.log('User found in DB:', rows.length > 0 ? rows[0].email : 'Not found');
 
     if (rows.length === 0) {
       return res.status(401).json({ message: 'User tidak ditemukan' });
@@ -35,17 +64,20 @@ app.post('/api/login', async (req, res) => {
     // Don't send password hash back to client
     delete user.password;
 
+    const roleName = user.role_name ? user.role_name.toLowerCase() : '';
+
     res.json({
       success: true,
       user: {
         id: user.id,
-        name: user.full_name,
+        name: user.name,
         email: user.email,
-        role: user.role_name.toLowerCase().includes('owner') ? 'owner' : 
-              user.role_name.toLowerCase().includes('finance') ? 'finance' :
-              user.role_name.toLowerCase().includes('purchasing') ? 'purchasing' :
-              user.role_name.toLowerCase().includes('project manager') ? 'pm' : 'mandor',
-        avatar: user.full_name.split(' ').map(n => n[0]).join('').substring(0,2)
+        role: roleName.includes('owner') ? 'owner' : 
+              roleName.includes('finance') ? 'finance' :
+              roleName.includes('purchasing') ? 'purchasing' :
+              roleName.includes('project manager') ? 'pm' : 
+              roleName.includes('admin') ? 'owner' : 'mandor',
+        avatar: user.name.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase()
       }
     });
 
@@ -177,7 +209,7 @@ app.get('/api/invoices', async (req, res) => {
   try {
     const query = `
       SELECT i.invoice_number as id, p.name as project, c.name as customer, 
-             i.amount, DATE_FORMAT(i.transaction_date, '%Y-%m-%d') as issueDate, 
+             i.amount, DATE_FORMAT(i.created_at, '%Y-%m-%d') as issueDate, 
              DATE_FORMAT(i.due_date, '%Y-%m-%d') as dueDate, i.status, 'Termin' as term
       FROM invoices i
       JOIN projects p ON i.project_id = p.id
@@ -227,19 +259,23 @@ app.get('/api/cashflows', async (req, res) => {
 app.get('/api/purchases', async (req, res) => {
   try {
     const query = `
-      SELECT po.po_number as id, 'Barang Umum' as material, 100 as qty, 'pcs' as unit,
-             s.name as supplier, po.total_amount as total, po.status, 'approved' as approval,
+      SELECT po.po_number as id, m.name as material, pi.quantity as qty, u.code as unit,
+             s.name as supplier, po.total_amount as total, po.status, 'pending' as approval,
              DATE_FORMAT(po.created_at, '%Y-%m-%d') as requestDate,
              DATE_FORMAT(po.created_at, '%Y-%m-%d') as deliveryDate,
              p.code as project
       FROM purchase_orders po
       LEFT JOIN suppliers s ON po.supplier_id = s.id
       LEFT JOIN projects p ON po.project_id = p.id
+      LEFT JOIN po_items pi ON pi.po_id = po.id
+      LEFT JOIN materials m ON pi.material_id = m.id
+      LEFT JOIN units u ON m.unit_id = u.id
+      ORDER BY po.created_at DESC
     `;
     const [rows] = await db.query(query);
     const formatted = rows.map(r => {
       let st = 'request';
-      if(r.status === 'Pending' || r.status === 'Waiting Approval') st = 'pending-approval';
+      if(r.status === 'Waiting Approval') st = 'pending-approval';
       if(r.status === 'Approved') st = 'ordered';
       if(r.status === 'Completed') st = 'delivered';
       return { ...r, status: st };
@@ -248,6 +284,104 @@ app.get('/api/purchases', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// GET Suppliers
+app.get('/api/suppliers', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT id, name FROM suppliers');
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// POST Purchase Request
+app.post('/api/purchases', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { projectId, supplierId, materialCode, qty, price } = req.body;
+
+    // Generate PO Number
+    const poNumber = 'PR-' + Date.now().toString().slice(-6);
+    const total = parseFloat(qty) * parseFloat(price);
+
+    // Insert PO Header
+    const [poResult] = await connection.query(
+      `INSERT INTO purchase_orders (uuid, po_number, project_id, supplier_id, creator_id, total_amount, status)
+       VALUES (UUID(), ?, ?, ?, 1, ?, 'Draft')`,
+      [poNumber, projectId, supplierId, total]
+    );
+
+    const poId = poResult.insertId;
+
+    // Get material ID from code
+    let materialId = null;
+    const [mats] = await connection.query('SELECT id FROM materials WHERE code = ? LIMIT 1', [materialCode]);
+    if (mats.length > 0) materialId = mats[0].id;
+
+    // Insert PO Item
+    if (materialId) {
+      await connection.query(
+        `INSERT INTO po_items (po_id, material_id, quantity, unit_price, total)
+         VALUES (?, ?, ?, ?, ?)`,
+        [poId, materialId, qty, price, total]
+      );
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'Purchase Request created' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// UPDATE Purchase Status
+app.put('/api/purchases/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    let dbStatus = 'Draft';
+    if (status === 'pending-approval') dbStatus = 'Waiting Approval';
+    if (status === 'ordered') dbStatus = 'Approved';
+    if (status === 'received' || status === 'delivered') dbStatus = 'Completed';
+    
+    await db.query('UPDATE purchase_orders SET status = ? WHERE po_number = ?', [dbStatus, id]);
+    res.json({ success: true, message: 'Status updated' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// DELETE Purchase
+app.delete('/api/purchases/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params;
+    
+    const [po] = await connection.query('SELECT id FROM purchase_orders WHERE po_number = ?', [id]);
+    if (po.length > 0) {
+      await connection.query('DELETE FROM po_items WHERE po_id = ?', [po[0].id]);
+      await connection.query('DELETE FROM purchase_orders WHERE id = ?', [po[0].id]);
+    }
+    
+    await connection.commit();
+    res.json({ success: true, message: 'Purchase deleted' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
   }
 });
 
@@ -357,6 +491,203 @@ app.get('/api/rabs', async (req, res) => {
     });
 
     res.json(formattedList);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+app.post('/api/execution/:projectId/progress', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { reportDate, progress, milestone, description } = req.body;
+    
+    const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
+    if (!project[0]) return res.status(404).json({ message: 'Project not found' });
+
+    await db.query(`
+      INSERT INTO project_progress (project_id, reporter_id, report_date, progress_percentage, milestone_name, description, status)
+      VALUES (?, 1, ?, ?, ?, ?, 'Approved')
+    `, [project[0].id, reportDate, progress, milestone || null, description]);
+
+    res.json({ success: true, message: 'Progress uploaded successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+app.get('/api/execution/:projectId/overview', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    
+    // Project Details
+    const [projects] = await db.query(`
+      SELECT p.id as db_id, p.code as id, p.name, c.name as customer, c.company, p.project_type as type, 
+             u.name as pm, p.contract_value as contractValue, p.contract_value as budget, 
+             p.status, DATE_FORMAT(p.deadline_date, '%Y-%m-%d') as deadline, DATE_FORMAT(p.start_date, '%Y-%m-%d') as startDate,
+             p.floor_count as floors, p.building_area as area, p.material_class as materialClass,
+             p.worker_system as laborType
+      FROM projects p
+      LEFT JOIN customers c ON p.customer_id = c.id
+      LEFT JOIN users u ON p.manager_id = u.id
+      WHERE p.id = ? OR p.code = ? LIMIT 1
+    `, [projectId, projectId]);
+
+    if (projects.length === 0) return res.status(404).json({ message: 'Project not found' });
+    const project = projects[0];
+
+    // Get latest progress
+    const [progresses] = await db.query('SELECT progress_percentage FROM project_progress WHERE project_id = ? ORDER BY report_date DESC LIMIT 1', [project.db_id]);
+    project.progress = progresses.length > 0 ? parseFloat(progresses[0].progress_percentage) : 0;
+    
+    // Status mapping
+    let st = 'on-track';
+    if(project.status === 'Paused') st = 'delayed';
+    if(project.status === 'Completed') st = 'completed';
+    project.status = st;
+
+    res.json(project);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+app.get('/api/execution/:projectId/timelines', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
+    if (!project[0]) return res.json([]);
+
+    const [timelines] = await db.query(`
+      SELECT id, title as task, 'Umum' as category, 'PM' as assignee, status, 
+             DATE_FORMAT(start_date, '%Y-%m-%d') as date, 
+             CASE WHEN status = 'Completed' THEN 100 WHEN status = 'In Progress' THEN 50 ELSE 0 END as progress
+      FROM project_timelines 
+      WHERE project_id = ?
+      ORDER BY start_date ASC
+    `, [project[0].id]);
+    
+    // Map status for frontend
+    const formatted = timelines.map(t => {
+      let st = 'pending';
+      if(t.status === 'In Progress') st = 'in-progress';
+      if(t.status === 'Completed') st = 'completed';
+      return { ...t, status: st };
+    });
+    
+    res.json(formatted);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+app.get('/api/execution/:projectId/materials', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
+    if (!project[0]) return res.json([]);
+
+    // Get usage from material_usages joined with daily_reports
+    const [usages] = await db.query(`
+      SELECT m.name, SUM(mu.quantity_used) as used, 1000 as plan -- Mocking plan for now
+      FROM material_usages mu
+      JOIN daily_reports dr ON mu.report_id = dr.id
+      JOIN materials m ON mu.material_id = m.id
+      WHERE dr.project_id = ?
+      GROUP BY m.id, m.name
+    `, [project[0].id]);
+    
+    const formatted = usages.map(u => ({
+      name: u.name,
+      used: parseFloat(u.used) + ' pcs',
+      plan: u.plan + ' pcs',
+      pct: Math.min(Math.round((parseFloat(u.used) / u.plan) * 100), 100)
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+app.get('/api/execution/:projectId/labor', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
+    if (!project[0]) return res.json([]);
+
+    const [reports] = await db.query('SELECT worker_count FROM daily_reports WHERE project_id = ? ORDER BY report_date DESC LIMIT 1', [project[0].id]);
+    const count = reports.length > 0 ? reports[0].worker_count : 0;
+    
+    res.json([
+      { role: "Pekerja Umum", today: count, plan: Math.max(count, 10) } // Mock plan
+    ]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+app.get('/api/execution/:projectId/photos', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
+    if (!project[0]) return res.json([]);
+
+    const [photos] = await db.query(`
+      SELECT id, file_name as title, DATE_FORMAT(created_at, '%d %b %Y') as date, 
+             'Lapangan' as area, file_path
+      FROM media_attachments 
+      WHERE model_type = 'Project' AND model_id = ? AND document_type = 'Photo'
+      ORDER BY created_at DESC
+    `, [project[0].id]);
+    
+    // Prefix the file_path with backend URL if needed, but relative should work if proxied
+    const formatted = photos.map(p => ({
+      id: p.id,
+      title: p.title,
+      date: p.date,
+      area: p.area,
+      url: `http://localhost:5000/${p.file_path}`
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+app.post('/api/execution/:projectId/photos', upload.single('photo'), async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { title, area } = req.body;
+    
+    if (!req.file) {
+      return res.status(400).json({ message: 'No photo uploaded' });
+    }
+
+    const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
+    if (!project[0]) {
+      // clean up uploaded file
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    // Insert into media_attachments
+    await db.query(`
+      INSERT INTO media_attachments (uploader_id, model_type, model_id, document_type, file_name, file_path, file_type)
+      VALUES (1, 'Project', ?, 'Photo', ?, ?, ?)
+    `, [
+      project[0].id, 
+      title || req.file.originalname, 
+      req.file.path.replace(/\\/g, '/'), 
+      req.file.mimetype
+    ]);
+
+    res.json({ success: true, message: 'Photo uploaded successfully' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });

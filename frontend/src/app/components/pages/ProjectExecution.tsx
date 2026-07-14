@@ -1,65 +1,190 @@
-import { useState } from "react";
-import { Camera, Upload, CheckSquare, Package, Users, Wrench, Clock, ChevronDown, ChevronUp, Check } from "lucide-react";
-import { projects, getStatusBadge } from "../../data/mockData";
-
-const MILESTONES = [
-  { label: "Fondasi Selesai", date: "2024-02-28", done: true },
-  { label: "Struktur Lantai 1-4", date: "2024-05-15", done: true },
-  { label: "Struktur Lantai 5-8", date: "2024-08-30", done: true },
-  { label: "Struktur Lantai 9-12", date: "2024-11-30", done: false },
-  { label: "MEP & Finishing", date: "2025-02-28", done: false },
-  { label: "Serah Terima", date: "2025-03-30", done: false },
-];
-
-const TASKS = [
-  { id: 1, task: "Pengecoran kolom lantai 8", category: "Struktur", assignee: "Agus S.", status: "in-progress", progress: 60 },
-  { id: 2, task: "Pemasangan besi lantai 9", category: "Struktur", assignee: "Tim B", status: "pending", progress: 0 },
-  { id: 3, task: "Pemasangan pipa HVAC lantai 5", category: "MEP", assignee: "Tim MEP", status: "in-progress", progress: 35 },
-  { id: 4, task: "Finishing dinding lantai 3", category: "Finishing", assignee: "Tim C", status: "completed", progress: 100 },
-  { id: 5, task: "Inspeksi pondasi", category: "QA/QC", assignee: "Budi S.", status: "completed", progress: 100 },
-];
-
-const MATERIALS = [
-  { name: "Beton K-300", used: "185 m³", plan: "230 m³", pct: 80 },
-  { name: "Besi Beton D13", used: "6,200 kg", plan: "8,500 kg", pct: 73 },
-  { name: "Semen Portland", used: "820 sak", plan: "1,200 sak", pct: 68 },
-  { name: "Bekisting Plywood", used: "380 lembar", plan: "500 lembar", pct: 76 },
-];
-
-const LABOR = [
-  { role: "Tukang Beton", today: 12, plan: 15 },
-  { role: "Tukang Besi", today: 8, plan: 10 },
-  { role: "Tukang MEP", today: 5, plan: 5 },
-  { role: "Pekerja Umum", today: 25, plan: 30 },
-];
-
-const PHOTOS = [
-  { id: 1, title: "Pengecoran Kolom K-8A", date: "06 Jul 2026", area: "Lantai 8" },
-  { id: 2, title: "Pembesian Sloof", date: "05 Jul 2026", area: "Lantai 7" },
-  { id: 3, title: "Progress Dinding Lantai 3", date: "04 Jul 2026", area: "Lantai 3" },
-  { id: 4, title: "Area Scaffolding", date: "03 Jul 2026", area: "Eksterior" },
-  { id: 5, title: "Instalasi Pipa HVAC", date: "02 Jul 2026", area: "Lantai 5" },
-  { id: 6, title: "Keramik Lobby Lt.1", date: "01 Jul 2026", area: "Lantai 1" },
-];
-
-const project = projects[0];
+import { useState, useEffect, useRef } from "react";
+import { Camera, Upload, CheckSquare, Package, Users, Wrench, Clock, ChevronDown, ChevronUp, Check, Loader2 } from "lucide-react";
+import { getStatusBadge } from "../../data/mockData";
 
 export function ProjectExecution() {
-  const [expandedTask, setExpandedTask] = useState<number | null>(null);
-  const badge = getStatusBadge(project.status);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("PRJ-001");
+  const [projectsList, setProjectsList] = useState<any[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [project, setProject] = useState<any>(null);
+  const [milestones, setMilestones] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [materials, setMaterials] = useState<any[]>([]);
+  const [labor, setLabor] = useState<any[]>([]);
+  const [photos, setPhotos] = useState<any[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+
+  // Progress Form State
+  const [showProgressModal, setShowProgressModal] = useState(false);
+  const [progressSubmitLoading, setProgressSubmitLoading] = useState(false);
+  const [progressForm, setProgressForm] = useState({ reportDate: new Date().toISOString().split('T')[0], progress: 0, milestone: "", description: "" });
+
+
+  // Photos mock for now
+  const PHOTOS = [
+    { id: 1, title: "Pengecoran Kolom K-8A", date: "06 Jul 2026", area: "Lantai 8" },
+    { id: 2, title: "Pembesian Sloof", date: "05 Jul 2026", area: "Lantai 7" },
+    { id: 3, title: "Progress Dinding Lantai 3", date: "04 Jul 2026", area: "Lantai 3" },
+  ];
+
+  useEffect(() => {
+    fetch("http://localhost:5000/api/projects")
+      .then(r => r.json())
+      .then(data => setProjectsList(data));
+  }, []);
+
+  const fetchData = () => {
+    if (!selectedProjectId) return;
+    setLoading(true);
+    
+    Promise.all([
+      fetch(`http://localhost:5000/api/execution/${selectedProjectId}/overview`).then(r => r.json()),
+      fetch(`http://localhost:5000/api/execution/${selectedProjectId}/timelines`).then(r => r.json()),
+      fetch(`http://localhost:5000/api/execution/${selectedProjectId}/materials`).then(r => r.json()),
+      fetch(`http://localhost:5000/api/execution/${selectedProjectId}/labor`).then(r => r.json()),
+      fetch(`http://localhost:5000/api/execution/${selectedProjectId}/photos`).then(r => r.json())
+    ]).then(([overview, timelines, mats, lab, pics]) => {
+      setProject(overview);
+      setMilestones(timelines.filter((t: any) => t.category === "Milestone" || t.progress >= 0).slice(0, 5));
+      setTasks(timelines);
+      setMaterials(mats);
+      setLabor(lab);
+      setPhotos(pics);
+    }).catch(err => console.error("Error fetching execution data:", err))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, [selectedProjectId]);
+
+  const handleProgressSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProgressSubmitLoading(true);
+    try {
+      await fetch(`http://localhost:5000/api/execution/${selectedProjectId}/progress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(progressForm)
+      });
+      setShowProgressModal(false);
+      setProgressForm({ reportDate: new Date().toISOString().split('T')[0], progress: 0, milestone: "", description: "" });
+      fetchData(); // Refresh data
+    } catch (error) {
+      console.error("Failed to upload progress", error);
+    } finally {
+      setProgressSubmitLoading(false);
+    }
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedProjectId) return;
+    
+    setIsUploadingPhoto(true);
+    const formData = new FormData();
+    formData.append("photo", file);
+    formData.append("title", file.name);
+
+    try {
+      await fetch(`http://localhost:5000/api/execution/${selectedProjectId}/photos`, {
+        method: "POST",
+        body: formData
+      });
+      fetchData();
+    } catch (err) {
+      console.error("Error uploading photo", err);
+    } finally {
+      setIsUploadingPhoto(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64 text-blue-600">
+        <Loader2 className="w-8 h-8 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!project || project.message) {
+    return <div className="p-5 text-gray-500">Project data not found.</div>;
+  }
+
+  const badge = getStatusBadge(project.status || 'delayed');
 
   return (
     <div className="space-y-5" style={{ fontFamily: "Inter, sans-serif" }}>
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Project Execution</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{project.name} — {project.id}</p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900">Project Execution</h1>
+            <p className="text-sm text-gray-500 mt-0.5">{project.name} — {project.id}</p>
+          </div>
+          <select 
+            value={selectedProjectId}
+            onChange={(e) => setSelectedProjectId(e.target.value)}
+            className="ml-4 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {projectsList.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+        <button 
+          onClick={() => {
+            setProgressForm({ ...progressForm, progress: project.progress || 0 });
+            setShowProgressModal(true);
+          }}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+        >
           <Upload size={16} /> Upload Progress
         </button>
       </div>
+
+      {/* Upload Progress Modal */}
+      {showProgressModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+              <h2 className="text-lg font-bold text-gray-900">Upload Progress Lapangan</h2>
+              <button onClick={() => setShowProgressModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            
+            <form onSubmit={handleProgressSubmit} className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tanggal Laporan</label>
+                  <input required type="date" value={progressForm.reportDate} onChange={e => setProgressForm({...progressForm, reportDate: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Total Progress (%)</label>
+                  <input required type="number" min="0" max="100" step="0.01" value={progressForm.progress} onChange={e => setProgressForm({...progressForm, progress: Number(e.target.value)})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Milestone (Opsional)</label>
+                <input type="text" placeholder="Misal: Selesai Pengecoran Lantai 2" value={progressForm.milestone} onChange={e => setProgressForm({...progressForm, milestone: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Catatan Tambahan</label>
+                <textarea rows={3} placeholder="Detail laporan..." value={progressForm.description} onChange={e => setProgressForm({...progressForm, description: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+              </div>
+
+              <div className="pt-4 border-t border-gray-100 flex justify-end gap-3">
+                <button type="button" onClick={() => setShowProgressModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">Batal</button>
+                <button type="submit" disabled={progressSubmitLoading} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-70">
+                  {progressSubmitLoading && <Loader2 size={16} className="animate-spin" />} Simpan Progress
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Progress Overview */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -117,26 +242,33 @@ export function ProjectExecution() {
       {/* Milestones */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <h2 className="text-sm font-semibold text-gray-900 mb-4">Timeline & Milestones</h2>
-        <div className="flex items-center overflow-x-auto pb-2">
-          {MILESTONES.map((m, i) => (
-            <div key={i} className="flex items-center">
-              <div className="flex flex-col items-center min-w-[120px]">
-                <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center ${
-                  m.done ? "bg-green-500 border-green-500" : "border-gray-300 bg-white"
-                }`}>
-                  {m.done ? <Check size={14} className="text-white" /> : <div className="w-2.5 h-2.5 rounded-full bg-gray-300" />}
+        {milestones.length === 0 ? (
+          <p className="text-sm text-gray-500">Belum ada timeline yang tercatat.</p>
+        ) : (
+          <div className="flex items-center overflow-x-auto pb-2">
+            {milestones.map((m: any, i) => {
+              const isDone = m.status === 'completed';
+              return (
+                <div key={i} className="flex items-center">
+                  <div className="flex flex-col items-center min-w-[120px]">
+                    <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center ${
+                      isDone ? "bg-green-500 border-green-500" : "border-gray-300 bg-white"
+                    }`}>
+                      {isDone ? <Check size={14} className="text-white" /> : <div className="w-2.5 h-2.5 rounded-full bg-gray-300" />}
+                    </div>
+                    <p className={`text-xs text-center mt-1 leading-tight ${isDone ? "text-gray-800 font-medium" : "text-gray-400"}`}>
+                      {m.task}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-0.5">{m.date}</p>
+                  </div>
+                  {i < milestones.length - 1 && (
+                    <div className={`h-0.5 w-8 mx-1 flex-shrink-0 ${isDone ? "bg-green-400" : "bg-gray-200"}`} />
+                  )}
                 </div>
-                <p className={`text-xs text-center mt-1 leading-tight ${m.done ? "text-gray-800 font-medium" : "text-gray-400"}`}>
-                  {m.label}
-                </p>
-                <p className="text-xs text-gray-400 mt-0.5">{m.date}</p>
-              </div>
-              {i < MILESTONES.length - 1 && (
-                <div className={`h-0.5 w-8 mx-1 flex-shrink-0 ${m.done ? "bg-green-400" : "bg-gray-200"}`} />
-              )}
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-12 gap-4">
@@ -147,7 +279,8 @@ export function ProjectExecution() {
             <h2 className="text-sm font-semibold text-gray-900">Today's Tasks</h2>
           </div>
           <div className="divide-y divide-gray-50">
-            {TASKS.map((task) => (
+            {tasks.length === 0 && <p className="p-5 text-sm text-gray-500">Belum ada task hari ini.</p>}
+            {tasks.map((task: any) => (
               <div key={task.id} className="px-5 py-3">
                 <div className="flex items-center gap-3">
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
@@ -193,7 +326,8 @@ export function ProjectExecution() {
               <h2 className="text-sm font-semibold text-gray-900">Material Digunakan</h2>
             </div>
             <div className="divide-y divide-gray-50">
-              {MATERIALS.map((m) => (
+              {materials.length === 0 && <p className="px-4 py-3 text-sm text-gray-500">Belum ada material yang digunakan.</p>}
+              {materials.map((m: any) => (
                 <div key={m.name} className="px-4 py-3">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-xs font-medium text-gray-800">{m.name}</p>
@@ -214,7 +348,8 @@ export function ProjectExecution() {
               <h2 className="text-sm font-semibold text-gray-900">Aktivitas Tenaga Kerja</h2>
             </div>
             <div className="divide-y divide-gray-50">
-              {LABOR.map((l) => (
+              {labor.length === 0 && <p className="px-4 py-3 text-sm text-gray-500">Belum ada laporan pekerja.</p>}
+              {labor.map((l: any) => (
                 <div key={l.role} className="px-4 py-3 flex items-center justify-between">
                   <p className="text-xs text-gray-700">{l.role}</p>
                   <div className="flex items-center gap-2">
@@ -232,27 +367,49 @@ export function ProjectExecution() {
       {/* Photo Gallery */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Camera size={15} className="text-gray-500" />
-            <h2 className="text-sm font-semibold text-gray-900">Foto Progress</h2>
+          <h2 className="text-sm font-semibold text-gray-900">Galeri Progress</h2>
+          <div className="flex items-center gap-3">
+            <button 
+              disabled={isUploadingPhoto}
+              onClick={() => fileInputRef.current?.click()}
+              className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 disabled:opacity-50"
+            >
+              {isUploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+              Upload Foto
+            </button>
+            <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handlePhotoUpload} />
+            <button className="text-sm text-gray-500 hover:text-gray-700 font-medium">Lihat Semua</button>
           </div>
-          <button className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
-            <Upload size={13} /> Upload Foto
-          </button>
         </div>
-        <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
-          {PHOTOS.map((photo) => (
-            <div key={photo.id} className="group cursor-pointer">
-              <div className="aspect-square bg-gray-100 rounded-xl flex items-center justify-center group-hover:bg-gray-200 transition-colors relative overflow-hidden">
-                <Camera size={24} className="text-gray-300" />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+        
+        {photos.length === 0 ? (
+          <div className="p-8 text-center text-sm text-gray-500 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+            Belum ada foto progress. Silakan upload.
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-4">
+            {photos.map((p) => (
+              <div key={p.id} className="group relative rounded-xl overflow-hidden bg-gray-100 aspect-[4/3]">
+                {p.url ? (
+                  <img src={p.url} alt={p.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 group-hover:scale-105 transition-transform duration-300">
+                    <Camera size={32} className="mb-2 opacity-50" />
+                    <p className="text-xs font-medium">{p.title}</p>
+                    <p className="text-[10px]">{p.date}</p>
+                  </div>
+                )}
+                {/* Overlay */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute bottom-3 left-3 right-3 text-white">
+                    <p className="text-xs font-semibold truncate">{p.title}</p>
+                    <p className="text-[10px] text-gray-300">{p.date} • {p.area}</p>
+                  </div>
                 </div>
               </div>
-              <p className="text-xs text-gray-600 mt-1 truncate">{photo.title}</p>
-              <p className="text-xs text-gray-400">{photo.area}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

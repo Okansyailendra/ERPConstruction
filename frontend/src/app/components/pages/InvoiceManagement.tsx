@@ -11,21 +11,23 @@ export function InvoiceManagement() {
     fetch('http://localhost:5000/api/invoices')
       .then(res => res.json())
       .then(data => {
-        setInvoices(data);
-        if(data.length > 0) setSelectedInvoice(data[0]);
+        const arr = Array.isArray(data) ? data : [];
+        setInvoices(arr);
+        if(arr.length > 0) setSelectedInvoice(arr[0]);
       })
       .catch(err => console.error(err));
   }, []);
 
-  const filtered = invoices.filter((inv) =>
-    inv.id.toLowerCase().includes(search.toLowerCase()) ||
-    inv.project.toLowerCase().includes(search.toLowerCase()) ||
-    inv.customer.toLowerCase().includes(search.toLowerCase())
+  const safeInvoices = Array.isArray(invoices) ? invoices : [];
+  const filtered = safeInvoices.filter((inv) =>
+    inv.id?.toLowerCase().includes(search.toLowerCase()) ||
+    inv.project?.toLowerCase().includes(search.toLowerCase()) ||
+    inv.customer?.toLowerCase().includes(search.toLowerCase())
   );
 
-  const totalPaid = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount, 0);
-  const totalPending = invoices.filter((i) => i.status === "pending").reduce((s, i) => s + i.amount, 0);
-  const totalOverdue = invoices.filter((i) => i.status === "overdue").reduce((s, i) => s + i.amount, 0);
+  const totalPaid = safeInvoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount, 0);
+  const totalPending = safeInvoices.filter((i) => i.status === "pending").reduce((s, i) => s + i.amount, 0);
+  const totalOverdue = safeInvoices.filter((i) => i.status === "overdue").reduce((s, i) => s + i.amount, 0);
 
   const badge = selectedInvoice ? getStatusBadge(selectedInvoice.status) : { color: '', label: '' };
 
