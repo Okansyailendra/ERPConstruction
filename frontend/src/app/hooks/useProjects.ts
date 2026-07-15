@@ -6,6 +6,8 @@ export interface ProjectData {
   name: string;
   customer: string;
   company: string;
+  email?: string;
+  phone?: string;
   type: string;
   pm: string;
   budget: number;
@@ -20,6 +22,10 @@ export interface ProjectData {
   area: number;
   materialClass: string;
   laborType: string;
+  locationCondition?: string;
+  paymentScheme?: string[];
+  scopes?: string[];
+  uploadedFiles?: Record<string, string>;
   materialCost: number;
   laborCost: number;
   equipmentCost: number;
@@ -29,40 +35,63 @@ export interface ProjectData {
 export function useProjects() {
   const [projects, setProjects] = useState<ProjectData[]>([]);
 
-  useEffect(() => {
+  const fetchProjects = () => {
     fetch('http://localhost:5000/api/projects')
       .then(res => res.json())
       .then(data => setProjects(data))
       .catch(err => console.error('Failed to fetch projects', err));
+  };
+
+  useEffect(() => {
+    fetchProjects();
   }, []);
 
-  const addProject = (newProject: Omit<ProjectData, 'id'>) => {
-    // Generate a random ID like PRJ-XXX
-    const id = `PRJ-${Math.floor(Math.random() * 900) + 100}`;
-    const project = { ...newProject, id };
-    
-    setProjects((prev) => {
-      const updated = [project, ...prev];
-      localStorage.setItem('erp_projects', JSON.stringify(updated));
-      return updated;
-    });
+  const addProject = async (newProject: Omit<ProjectData, 'id'>) => {
+    try {
+      const res = await fetch('http://localhost:5000/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newProject)
+      });
+      if (res.ok) {
+        fetchProjects();
+        const data = await res.json();
+        return data.code;
+      }
+      return false;
+    } catch (err) {
+      console.error('Failed to add project', err);
+      return false;
+    }
   };
 
-  const updateProject = (id: string, updatedData: Partial<ProjectData>) => {
-    setProjects((prev) => {
-      const updated = prev.map(p => p.id === id ? { ...p, ...updatedData } : p);
-      localStorage.setItem('erp_projects', JSON.stringify(updated));
-      return updated;
-    });
+  const updateProject = async (id: string, updatedData: Partial<ProjectData>) => {
+    try {
+      const res = await fetch(`http://localhost:5000/api/projects/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData)
+      });
+      if (res.ok) {
+        fetchProjects();
+      }
+      return res.ok;
+    } catch (err) {
+      console.error('Failed to update project', err);
+      return false;
+    }
   };
 
-  const deleteProject = (id: string) => {
-    setProjects((prev) => {
-      const updated = prev.filter(p => p.id !== id);
-      localStorage.setItem('erp_projects', JSON.stringify(updated));
-      return updated;
-    });
+  const deleteProject = async (id: string) => {
+    try {
+      const res = await fetch(`http://localhost:5000/api/projects/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchProjects(); // Refresh from backend
+      }
+    } catch (err) {
+      console.error('Failed to delete project', err);
+    }
   };
 
-  return { projects, addProject, updateProject, deleteProject };
+  return { projects, addProject, updateProject, deleteProject, fetchProjects };
 }

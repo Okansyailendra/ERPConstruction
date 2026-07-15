@@ -17,11 +17,15 @@ export function MasterAHSP() {
   const [formEquipments, setFormEquipments] = useState<any[]>([]);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
+  const fetchAhsps = () => {
     fetch('http://localhost:5000/api/ahsps')
       .then(res => res.json())
       .then(data => setAhspItems(data))
       .catch(err => console.error(err));
+  };
+
+  useEffect(() => {
+    fetchAhsps();
   }, []);
 
   const filtered = ahspItems.filter((item) =>
@@ -47,7 +51,7 @@ export function MasterAHSP() {
     setIsDrawerOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // Beautiful Validation
     const errors: Record<string, string> = {};
     if(!formAhsp.code.trim()) errors.code = "Kode wajib diisi";
@@ -64,8 +68,7 @@ export function MasterAHSP() {
     const eqTotal = formEquipments.reduce((s, e) => s + (Number(e.coefficient) * Number(e.price)), 0);
     const grandTotal = matTotal + labTotal + eqTotal;
 
-    const newItem = {
-      id: formAhsp.code,
+    const payload = {
       code: formAhsp.code,
       name: formAhsp.name,
       unit: formAhsp.unit,
@@ -75,13 +78,32 @@ export function MasterAHSP() {
       equipment: formEquipments
     };
 
-    if(ahspToEdit) {
-      setAhspItems(ahspItems.map(a => a.code === formAhsp.code ? newItem : a));
-    } else {
-      setAhspItems([...ahspItems, newItem]);
+    try {
+      let res;
+      if (ahspToEdit) {
+        res = await fetch(`http://localhost:5000/api/ahsps/${ahspToEdit.code}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        res = await fetch('http://localhost:5000/api/ahsps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      if (res.ok) {
+        fetchAhsps();
+        setIsDrawerOpen(false);
+      } else {
+        alert("Gagal menyimpan AHSP");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Terjadi kesalahan server");
     }
-    
-    setIsDrawerOpen(false);
   };
 
   const addRow = (type: 'material' | 'labor' | 'equipment') => {

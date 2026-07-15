@@ -1,22 +1,89 @@
-import { useState, useEffect } from "react";
-import { Search, Plus, Printer, Mail, Download, Eye, MoreHorizontal } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Search, Plus, Printer, Mail, Download, Eye, Loader2 } from "lucide-react";
 import { formatCurrency, formatCurrencyFull, getStatusBadge } from "../../data/mockData";
 
 export function InvoiceManagement() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
   const [search, setSearch] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [projectsList, setProjectsList] = useState<any[]>([]);
+  const [formData, setFormData] = useState({ projectId: "", amount: "", dueDate: "" });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
+  const fetchData = () => {
     fetch('http://localhost:5000/api/invoices')
       .then(res => res.json())
       .then(data => {
         const arr = Array.isArray(data) ? data : [];
         setInvoices(arr);
-        if(arr.length > 0) setSelectedInvoice(arr[0]);
+        if (selectedInvoice) {
+            const updated = arr.find((i: any) => i.id === selectedInvoice.id);
+            if(updated) setSelectedInvoice(updated);
+        } else if (arr.length > 0) {
+            setSelectedInvoice(arr[0]);
+        }
       })
       .catch(err => console.error(err));
+
+    fetch('http://localhost:5000/api/projects')
+      .then(res => res.json())
+      .then(data => setProjectsList(Array.isArray(data) ? data : []))
+      .catch(err => console.error(err));
+  };
+
+  useEffect(() => {
+    fetchData();
   }, []);
+
+  const handleUploadProof = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedInvoice) return;
+    
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append("proof", file);
+
+    try {
+        await fetch(`http://localhost:5000/api/invoices/${selectedInvoice.id}/pay`, {
+            method: "POST",
+            body: formData
+        });
+        fetchData(); // refresh to get 'Paid' status
+    } catch (err) {
+        console.error("Error uploading payment proof", err);
+    } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleCreateInvoice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.projectId || !formData.amount || !formData.dueDate) return;
+    setIsSubmitting(true);
+    try {
+      await fetch('http://localhost:5000/api/invoices', {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: formData.projectId,
+          amount: parseFloat(formData.amount),
+          due_date: formData.dueDate
+        })
+      });
+      setIsCreateModalOpen(false);
+      setFormData({ projectId: "", amount: "", dueDate: "" });
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const safeInvoices = Array.isArray(invoices) ? invoices : [];
   const filtered = safeInvoices.filter((inv) =>
@@ -41,7 +108,10 @@ export function InvoiceManagement() {
           <h1 className="text-xl font-semibold text-gray-900">Invoice Management</h1>
           <p className="text-sm text-gray-500 mt-0.5">Kelola seluruh invoice proyek</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+        <button 
+          onClick={() => setIsCreateModalOpen(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm shadow-blue-200 transition-colors"
+        >
           <Plus size={16} /> Buat Invoice
         </button>
       </div>
@@ -214,14 +284,92 @@ export function InvoiceManagement() {
               <div className="border-2 border-dashed border-blue-200 rounded-xl p-4 text-center bg-blue-50/50">
                 <p className="text-xs font-medium text-blue-700 mb-1">Upload Bukti Pembayaran</p>
                 <p className="text-xs text-blue-400 mb-3">Format: JPG, PNG, PDF (Max 5MB)</p>
-                <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
-                  Pilih File
+                <input type="file" ref={fileInputRef} onChange={handleUploadProof} className="hidden" accept=".jpg,.png,.pdf" />
+                <button 
+                  disabled={isUploading}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 flex items-center justify-center gap-2 mx-auto disabled:opacity-70 transition-colors"
+                >
+                  {isUploading && <Loader2 size={14} className="animate-spin" />}
+                  {isUploading ? "Mengunggah..." : "Pilih File"}
                 </button>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Create Modal */}
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+              <h3 className="text-lg font-semibold text-gray-900">Buat Invoice Baru</h3>
+              <button onClick={() => setIsCreateModalOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form onSubmit={handleCreateInvoice} className="p-6 space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Pilih Proyek</label>
+                <select 
+                  required
+                  value={formData.projectId}
+                  onChange={(e) => setFormData({...formData, projectId: e.target.value})}
+                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                >
+                  <option value="">-- Pilih Proyek --</option>
+                  {projectsList.map(p => (
+                    <option key={p.db_id} value={p.db_id}>{p.id} - {p.name}</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Jumlah Tagihan (Rp)</label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 font-medium">Rp</span>
+                  <input 
+                    type="number"
+                    required
+                    value={formData.amount}
+                    onChange={(e) => setFormData({...formData, amount: e.target.value})}
+                    placeholder="0"
+                    className="w-full pl-11 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Jatuh Tempo</label>
+                <input 
+                  type="date"
+                  required
+                  value={formData.dueDate}
+                  onChange={(e) => setFormData({...formData, dueDate: e.target.value})}
+                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex gap-3">
+                <button 
+                  type="button" 
+                  onClick={() => setIsCreateModalOpen(false)}
+                  className="flex-1 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Batal
+                </button>
+                <button 
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all flex justify-center items-center gap-2 disabled:opacity-70"
+                >
+                  {isSubmitting && <Loader2 size={16} className="animate-spin" />}
+                  {isSubmitting ? "Menyimpan..." : "Buat Invoice"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

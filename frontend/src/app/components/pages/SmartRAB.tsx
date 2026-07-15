@@ -32,7 +32,20 @@ export function SmartRAB() {
       .then(res => res.json())
       .then(data => {
         setProjects(data);
-        if (data.length > 0) setSelectedProjectId(data[0].db_id || data[0].id);
+        const params = new URLSearchParams(window.location.search);
+        const generatedFor = params.get('generatedFor');
+        
+        if (generatedFor) {
+           const proj = data.find((p: any) => p.id === generatedFor);
+           if (proj) {
+             setSelectedProjectId(proj.db_id || proj.id);
+             setTimeout(() => alert("Draft RAB berhasil di-generate oleh AI! Silakan tinjau dan edit di bawah ini."), 500);
+           } else {
+             if (data.length > 0) setSelectedProjectId(data[0].db_id || data[0].id);
+           }
+        } else {
+           if (data.length > 0) setSelectedProjectId(data[0].db_id || data[0].id);
+        }
       })
       .catch(err => console.error(err));
       

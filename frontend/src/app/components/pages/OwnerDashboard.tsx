@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -6,37 +6,9 @@ import {
 } from "recharts";
 import {
   FolderKanban, TrendingUp, TrendingDown, DollarSign, CheckSquare,
-  Clock, AlertCircle, ChevronRight, MoreHorizontal, Plus,
+  Clock, AlertCircle, ChevronRight, MoreHorizontal, Plus, Loader2
 } from "lucide-react";
-import { projects, invoices, cashflowData, formatCurrency, getStatusBadge } from "../../data/mockData";
-
-const CASHFLOW_DATA = cashflowData.map((d) => ({
-  ...d,
-  income: d.income / 1000,
-  expense: d.expense / 1000,
-  balance: d.balance / 1000,
-}));
-
-const PIE_DATA = [
-  { name: "On Track", value: 2, color: "#16A34A" },
-  { name: "At Risk", value: 1, color: "#F59E0B" },
-  { name: "Delayed", value: 1, color: "#DC2626" },
-  { name: "Completed", value: 1, color: "#2563EB" },
-];
-
-const ACTIVITIES = [
-  { time: "09:15", event: "Invoice INV-2024-003 diterima oleh PT. Lippo Mall", type: "info" },
-  { time: "10:30", event: "Purchase Request PR-2024-004 menunggu approval Finance", type: "warning" },
-  { time: "11:00", event: "Progress foto PRJ-001 diupload oleh Mandor Agus", type: "success" },
-  { time: "13:45", event: "Material Beton K-300 diterima di site PRJ-001", type: "success" },
-  { time: "15:20", event: "Deadline PRJ-004 warning: tersisa 45 hari", type: "warning" },
-];
-
-const APPROVALS = [
-  { id: "PR-2024-004", type: "Purchase Request", desc: "Semen Portland 200 sak - Rp 14.3jt", urgency: "normal", requestBy: "Hendra W." },
-  { id: "PR-2024-002", type: "Purchase Request", desc: "Besi Beton D13 2000kg - Rp 28jt", urgency: "urgent", requestBy: "Hendra W." },
-  { id: "INV-2024-005", type: "Invoice Approval", desc: "INV-2024-005 Rp 6.4M - Termin 80%", urgency: "normal", requestBy: "Dewi R." },
-];
+import { formatCurrency, getStatusBadge } from "../../data/mockData";
 
 function KpiCard({ label, value, trend, trendVal, icon, color }: {
   label: string; value: string; trend?: "up" | "down"; trendVal?: string;
@@ -66,11 +38,55 @@ function KpiCard({ label, value, trend, trendVal, icon, color }: {
 export function OwnerDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<"cashflow" | "revenue">("cashflow");
+  const [projectsData, setProjectsData] = useState<any[]>([]);
+  const [cashflowData, setCashflowData] = useState<any[]>([]);
+  const [approvalsData, setApprovalsData] = useState<any[]>([]);
+  const [activitiesData, setActivitiesData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const totalBudget = projects.reduce((s, p) => s + p.budget, 0);
-  const totalContract = projects.reduce((s, p) => s + p.contractValue, 0);
-  const totalCost = projects.reduce((s, p) => s + p.materialCost + p.laborCost + p.equipmentCost + p.operationalCost, 0);
+  useEffect(() => {
+    Promise.all([
+      fetch('http://localhost:5000/api/projects').then(r => r.json()),
+      fetch('http://localhost:5000/api/cashflows').then(r => r.json()),
+      fetch('http://localhost:5000/api/purchases').then(r => r.json()),
+      fetch('http://localhost:5000/api/activities').then(r => r.json())
+    ]).then(([projects, cashflows, purchases, activities]) => {
+      setProjectsData(projects);
+      
+      const formattedCashflows = cashflows.map((d: any) => ({
+        ...d,
+        income: d.income / 1000000,
+        expense: d.expense / 1000000,
+        balance: d.balance / 1000000,
+      }));
+      setCashflowData(formattedCashflows);
+      
+      const pending = purchases.filter((p: any) => p.status === 'pending-approval').slice(0, 5);
+      setApprovalsData(pending);
+      setActivitiesData(activities);
+    }).catch(err => console.error("Failed to load dashboard data", err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-blue-600">
+        <Loader2 className="w-8 h-8 animate-spin mb-4" />
+        <p className="text-sm font-medium text-gray-500">Memuat Dashboard...</p>
+      </div>
+    );
+  }
+
+  const totalContract = projectsData.reduce((s, p) => s + Number(p.contractValue || 0), 0);
+  const totalCost = projectsData.reduce((s, p) => s + (Number(p.contractValue || 0) * 0.75), 0); 
   const netProfit = totalContract - totalCost;
+
+  const pieData = [
+    { name: "On Track", value: projectsData.filter(p => p.status === 'on-track').length || 0, color: "#16A34A" },
+    { name: "At Risk", value: projectsData.filter(p => p.status === 'at-risk').length || 0, color: "#F59E0B" },
+    { name: "Delayed", value: projectsData.filter(p => p.status === 'delayed').length || 0, color: "#DC2626" },
+    { name: "Completed", value: projectsData.filter(p => p.status === 'completed').length || 0, color: "#2563EB" },
+  ].filter(d => d.value > 0);
 
   return (
     <div className="space-y-6" style={{ fontFamily: "Inter, sans-serif" }}>
@@ -78,7 +94,7 @@ export function OwnerDashboard() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Owner Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Senin, 6 Juli 2026 &mdash; Ringkasan perusahaan hari ini</p>
+          <p className="text-sm text-gray-500 mt-0.5">Ringkasan perusahaan hari ini</p>
         </div>
         <button
           onClick={() => navigate("/projects/add")}
@@ -90,7 +106,7 @@ export function OwnerDashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <KpiCard label="Proyek Aktif" value="24" trend="up" trendVal="+3 bulan ini"
+        <KpiCard label="Proyek Aktif" value={projectsData.length.toString()} trend="up" trendVal="+3 bulan ini"
           icon={<FolderKanban size={20} className="text-blue-600" />} color="bg-blue-50" />
         <KpiCard label="Total Revenue" value={formatCurrency(totalContract)} trend="up" trendVal="+12% YoY"
           icon={<TrendingUp size={20} className="text-green-600" />} color="bg-green-50" />
@@ -98,7 +114,7 @@ export function OwnerDashboard() {
           icon={<TrendingDown size={20} className="text-red-500" />} color="bg-red-50" />
         <KpiCard label="Net Profit" value={formatCurrency(netProfit)} trend="up" trendVal="+8.2% MoM"
           icon={<DollarSign size={20} className="text-purple-600" />} color="bg-purple-50" />
-        <KpiCard label="Pending Approval" value="3" trendVal="Butuh tindakan"
+        <KpiCard label="Pending Approval" value={approvalsData.length.toString()} trendVal="Butuh tindakan"
           icon={<CheckSquare size={20} className="text-amber-500" />} color="bg-amber-50" />
       </div>
 
@@ -124,7 +140,7 @@ export function OwnerDashboard() {
           </div>
           <ResponsiveContainer width="100%" height={220}>
             {activeTab === "cashflow" ? (
-              <LineChart data={CASHFLOW_DATA}>
+              <LineChart data={cashflowData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
                 <XAxis dataKey="month" tick={{ fontSize: 12, fill: "#6B7280" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 12, fill: "#6B7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}M`} />
@@ -135,7 +151,7 @@ export function OwnerDashboard() {
                 <Line type="monotone" dataKey="balance" stroke="#16A34A" strokeWidth={2} dot={false} name="Saldo" />
               </LineChart>
             ) : (
-              <BarChart data={CASHFLOW_DATA}>
+              <BarChart data={cashflowData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
                 <XAxis dataKey="month" tick={{ fontSize: 12, fill: "#6B7280" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 12, fill: "#6B7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}M`} />
@@ -153,8 +169,8 @@ export function OwnerDashboard() {
           <h2 className="text-sm font-semibold text-gray-900 mb-4">Status Proyek</h2>
           <ResponsiveContainer width="100%" height={140}>
             <PieChart>
-              <Pie data={PIE_DATA} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={3} dataKey="value">
-                {PIE_DATA.map((entry, index) => (
+              <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={3} dataKey="value">
+                {pieData.map((entry, index) => (
                   <Cell key={index} fill={entry.color} />
                 ))}
               </Pie>
@@ -162,7 +178,7 @@ export function OwnerDashboard() {
             </PieChart>
           </ResponsiveContainer>
           <div className="space-y-2 mt-3">
-            {PIE_DATA.map((item) => (
+            {pieData.map((item) => (
               <div key={item.name} className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
@@ -197,7 +213,7 @@ export function OwnerDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {projects.map((project) => {
+                {projectsData.slice(0, 5).map((project) => {
                   const badge = getStatusBadge(project.status);
                   return (
                     <tr key={project.id} className="border-b border-gray-50 hover:bg-gray-50/50 cursor-pointer">
@@ -216,7 +232,7 @@ export function OwnerDashboard() {
                           <span className="text-xs text-gray-600 w-8">{project.progress}%</span>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-700">{formatCurrency(project.budget)}</td>
+                      <td className="px-4 py-3 text-xs text-gray-700">{formatCurrency(project.budget || project.contractValue)}</td>
                       <td className="px-4 py-3 text-xs text-gray-600">{project.deadline}</td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${badge.color}`}>
@@ -237,22 +253,21 @@ export function OwnerDashboard() {
           <div className="bg-white rounded-xl border border-gray-200">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <h2 className="text-sm font-semibold text-gray-900">Approval Center</h2>
-              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">{APPROVALS.length} Pending</span>
+              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">{approvalsData.length} Pending</span>
             </div>
             <div className="divide-y divide-gray-50">
-              {APPROVALS.map((item) => (
+              {approvalsData.length === 0 && <p className="p-5 text-sm text-gray-500 text-center">Tidak ada approval yang tertunda.</p>}
+              {approvalsData.map((item) => (
                 <div key={item.id} className="px-5 py-3 flex items-start gap-3">
-                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                    item.urgency === "urgent" ? "bg-red-50" : "bg-amber-50"
-                  }`}>
-                    <AlertCircle size={14} className={item.urgency === "urgent" ? "text-red-500" : "text-amber-500"} />
+                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 bg-amber-50`}>
+                    <AlertCircle size={14} className="text-amber-500" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-medium text-gray-900">{item.id}</p>
-                      <span className="text-xs text-gray-400">{item.requestBy}</span>
+                      <span className="text-xs text-gray-400">Purchasing</span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-0.5 truncate">{item.desc}</p>
+                    <p className="text-xs text-gray-500 mt-0.5 truncate">{item.material} - {formatCurrency(item.total)}</p>
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
                     <button className="px-2 py-1 bg-green-50 text-green-700 text-xs rounded-lg hover:bg-green-100">✓</button>
@@ -269,7 +284,8 @@ export function OwnerDashboard() {
               <h2 className="text-sm font-semibold text-gray-900">Aktivitas Hari Ini</h2>
             </div>
             <div className="divide-y divide-gray-50">
-              {ACTIVITIES.map((act, i) => (
+              {activitiesData.length === 0 && <p className="p-5 text-sm text-gray-500 text-center">Belum ada aktivitas hari ini.</p>}
+              {activitiesData.map((act, i) => (
                 <div key={i} className="px-5 py-3 flex gap-3">
                   <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${
                     act.type === "success" ? "bg-green-500" :

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
-import { Check, ChevronRight, Upload, Zap, Building2, User, Mail, Phone, MapPin, DollarSign, Calendar, Info, Layers } from "lucide-react";
+import { Check, ChevronRight, Upload, Zap, Building2, User, Mail, Phone, MapPin, DollarSign, Calendar, Info, Layers, Loader2 } from "lucide-react";
 import { useProjects } from "../../hooks/useProjects";
 
 const STEPS = [
@@ -19,7 +19,9 @@ export function AddProject() {
   const [paymentScheme, setPaymentScheme] = useState<string[]>([]);
   const [scopes, setScopes] = useState<string[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<Record<string, string>>({});
-  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGeneratingRAB, setIsGeneratingRAB] = useState(false);
+  const [aiLoadingText, setAiLoadingText] = useState("Menyimpan spesifikasi proyek...");
   const [formData, setFormData] = useState({
     name: "",
     customer: "",
@@ -50,14 +52,14 @@ export function AddProject() {
           name: existing.name || "",
           customer: existing.customer || "",
           company: existing.company || "",
-          email: "", 
-          phone: "",
+          email: existing.email || "", 
+          phone: existing.phone || "",
           type: existing.type || "Commercial",
           area: existing.area || 0,
           floors: existing.floors || 1,
           materialClass: existing.materialClass || "Standard",
           laborType: existing.laborType || "Contract",
-          locationCondition: "Mudah (akses jalan baik)",
+          locationCondition: existing.locationCondition || "Mudah (akses jalan baik)",
           pm: existing.pm || "Budi Santoso",
           location: existing.location || "",
           contractValue: existing.contractValue || 0,
@@ -66,6 +68,9 @@ export function AddProject() {
           startDate: existing.startDate || "",
           deadline: existing.deadline || "",
         });
+        if (existing.paymentScheme) setPaymentScheme(existing.paymentScheme);
+        if (existing.scopes) setScopes(existing.scopes);
+        if (existing.uploadedFiles) setUploadedFiles(existing.uploadedFiles);
       }
     }
   }, [id, projects]);
@@ -98,7 +103,14 @@ export function AddProject() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    let finalValue: any = value;
+    if (name === 'phone') {
+      finalValue = value.replace(/\D/g, '');
+    } else if (name === 'contractValue' || name === 'dp') {
+      const digits = value.replace(/\D/g, '');
+      finalValue = digits ? Number(digits) : 0;
+    }
+    setFormData(prev => ({ ...prev, [name]: finalValue }));
     // Clear error when typing
     if (errors[name]) {
       setErrors(prev => {
@@ -134,9 +146,9 @@ export function AddProject() {
     );
   };
 
-  const handleSaveProject = () => {
+  const getProjectPayload = () => {
     const val = Number(formData.contractValue);
-    const newProject = {
+    return {
       name: formData.name || "Proyek Baru",
       customer: formData.customer || "Customer",
       company: formData.company || "Perusahaan",
@@ -154,19 +166,72 @@ export function AddProject() {
       area: Number(formData.area) || 0,
       materialClass: formData.materialClass,
       laborType: formData.laborType,
+      paymentScheme,
+      scopes,
+      uploadedFiles,
       materialCost: val * 0.4 || 40000000,
       laborCost: val * 0.25 || 25000000,
       equipmentCost: val * 0.1 || 10000000,
       operationalCost: val * 0.05 || 5000000,
     };
+  };
+
+  const handleSaveProject = async () => {
+    setIsSubmitting(true);
+    const newProject = getProjectPayload();
     
+    let success = false;
     if (id) {
-      updateProject(id, newProject);
+      success = await updateProject(id, newProject);
     } else {
-      addProject(newProject);
+      success = await addProject(newProject);
     }
     
-    navigate("/projects");
+    setIsSubmitting(false);
+    if(success !== false) {
+      navigate("/projects");
+    } else {
+      alert("Gagal menyimpan proyek. Periksa koneksi server Anda.");
+    }
+  };
+
+  const handleGenerateRAB = async () => {
+    if (!validateStep(step)) return;
+    
+    setIsGeneratingRAB(true);
+    setAiLoadingText("Menyimpan spesifikasi proyek...");
+    
+    const newProject = getProjectPayload();
+    let projectCode = id;
+    
+    if (id) {
+      await updateProject(id, newProject);
+    } else {
+      projectCode = await addProject(newProject);
+    }
+    
+    if (projectCode) {
+      setAiLoadingText("AI sedang menghitung estimasi RAB...");
+      try {
+        await fetch('http://localhost:5000/api/rabs/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: projectCode, parameters: formData })
+        });
+        
+        // Wait a bit to simulate AI processing for user experience
+        setTimeout(() => {
+          navigate(`/rab?generatedFor=${projectCode}`);
+        }, 1500);
+      } catch (err) {
+        console.error(err);
+        alert("Gagal men-generate RAB.");
+        setIsGeneratingRAB(false);
+      }
+    } else {
+      alert("Gagal menyimpan proyek.");
+      setIsGeneratingRAB(false);
+    }
   };
 
   const getInputClass = (name: string) => `w-full pl-10 pr-4 py-3 bg-gray-50 border ${errors[name] ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500 hover:border-gray-300'} rounded-xl text-sm focus:outline-none focus:ring-2 focus:bg-white transition-all duration-200`;
@@ -364,7 +429,7 @@ export function AddProject() {
                 <label className={labelClass}>Nilai Kontrak (Rp) <span className="text-red-500">*</span></label>
                 <div className="relative">
                   <span className={`absolute left-4 top-1/2 -translate-y-1/2 font-medium ${errors.contractValue ? 'text-red-400' : 'text-gray-500'}`}>Rp</span>
-                  <input name="contractValue" type="number" value={formData.contractValue} onChange={handleChange} className={`${getInputClass("contractValue")} !pl-10`} placeholder="0" />
+                  <input name="contractValue" type="text" value={formData.contractValue ? formData.contractValue.toLocaleString('id-ID') : ''} onChange={handleChange} className={`${getInputClass("contractValue")} !pl-10`} placeholder="0" />
                 </div>
                 <ErrorMsg name="contractValue" />
               </div>
@@ -372,7 +437,7 @@ export function AddProject() {
                 <label className={labelClass}>Uang Muka / DP (Rp) <span className="text-red-500">*</span></label>
                 <div className="relative">
                   <span className={`absolute left-4 top-1/2 -translate-y-1/2 font-medium ${errors.dp ? 'text-red-400' : 'text-gray-500'}`}>Rp</span>
-                  <input name="dp" type="number" value={formData.dp} onChange={handleChange} className={`${getInputClass("dp")} !pl-10`} placeholder="0" />
+                  <input name="dp" type="text" value={formData.dp ? formData.dp.toLocaleString('id-ID') : ''} onChange={handleChange} className={`${getInputClass("dp")} !pl-10`} placeholder="0" />
                 </div>
                 <ErrorMsg name="dp" />
               </div>
@@ -565,10 +630,15 @@ export function AddProject() {
                   </p>
                 </div>
                 <button
-                  onClick={() => navigate("/rab")}
-                  className="px-6 py-3 bg-white text-purple-700 font-bold rounded-xl text-sm whitespace-nowrap flex items-center gap-2 transition-all duration-300 hover:scale-105 hover:shadow-xl shadow-md"
+                  onClick={handleGenerateRAB}
+                  disabled={isGeneratingRAB}
+                  className="px-6 py-3 bg-white text-purple-700 font-bold rounded-xl text-sm whitespace-nowrap flex items-center gap-2 transition-all duration-300 hover:scale-105 hover:shadow-xl shadow-md disabled:opacity-90 disabled:pointer-events-none"
                 >
-                  <Zap size={18} className="text-yellow-500" /> Coba Generate RAB
+                  {isGeneratingRAB ? (
+                    <><Loader2 size={18} className="animate-spin text-purple-600" /> {aiLoadingText}</>
+                  ) : (
+                    <><Zap size={18} className="text-yellow-500" /> Simpan & Generate RAB</>
+                  )}
                 </button>
               </div>
             </div>
@@ -601,9 +671,14 @@ export function AddProject() {
               onClick={() => {
                 if (validateStep(step)) handleSaveProject();
               }}
-              className="flex items-center gap-2 px-8 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl text-sm font-bold hover:shadow-lg hover:shadow-green-500/40 transition-all duration-300 hover:-translate-y-0.5"
+              disabled={isSubmitting}
+              className="flex items-center gap-2 px-8 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl text-sm font-bold hover:shadow-lg hover:shadow-green-500/40 transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-70 disabled:pointer-events-none"
             >
-              <Check size={18} /> {id ? "Simpan Perubahan" : "Simpan Proyek Sekarang"}
+              {isSubmitting ? (
+                 <>Menyimpan...</>
+              ) : (
+                 <><Check size={18} /> {id ? "Simpan Perubahan" : "Simpan Proyek Sekarang"}</>
+              )}
             </button>
           )}
         </div>

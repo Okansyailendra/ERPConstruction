@@ -16,11 +16,15 @@ export function MasterMaterial() {
   const [page, setPage] = useState(1);
   const perPage = 10;
 
-  useEffect(() => {
+  const fetchMaterials = () => {
     fetch('http://localhost:5000/api/materials')
       .then(res => res.json())
       .then(data => setMaterialsList(data))
       .catch(err => console.error(err));
+  };
+
+  useEffect(() => {
+    fetchMaterials();
   }, []);
 
   const [newMaterial, setNewMaterial] = useState({
@@ -28,7 +32,7 @@ export function MasterMaterial() {
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  const handleSaveMaterial = () => {
+  const handleSaveMaterial = async () => {
     const errors: Record<string, string> = {};
     if (!newMaterial.code.trim()) errors.code = "Wajib diisi";
     if (!newMaterial.name.trim()) errors.name = "Wajib diisi";
@@ -39,37 +43,62 @@ export function MasterMaterial() {
       return;
     }
 
-    const newItem = {
-      id: `MAT-${Date.now()}`,
-      code: newMaterial.code,
-      name: newMaterial.name,
-      category: newMaterial.category,
-      unit: newMaterial.unit,
-      supplier: newMaterial.supplier || "-",
-      purchasePrice: Number(newMaterial.purchasePrice) || 0,
-      markup: Number(newMaterial.markup) || 0,
-      sellingPrice: (Number(newMaterial.purchasePrice) || 0) * (1 + (Number(newMaterial.markup) || 0) / 100),
-      stock: Number(newMaterial.stock) || 0,
-      minStock: Number(newMaterial.minStock) || 0,
-      status: "active"
-    };
+    try {
+      const payload = {
+        code: newMaterial.code,
+        name: newMaterial.name,
+        category: newMaterial.category,
+        unit: newMaterial.unit,
+        supplier: newMaterial.supplier || "-",
+        purchasePrice: Number(newMaterial.purchasePrice) || 0,
+        markup: Number(newMaterial.markup) || 0,
+        sellingPrice: (Number(newMaterial.purchasePrice) || 0) * (1 + (Number(newMaterial.markup) || 0) / 100),
+        stock: Number(newMaterial.stock) || 0,
+        minStock: Number(newMaterial.minStock) || 0,
+      };
 
-    setMaterialsList([newItem, ...materialsList]);
-    setShowAddModal(false);
-    setNewMaterial({
-      code: "", name: "", category: "Material", unit: "buah", supplier: "", purchasePrice: "", markup: "", stock: "", minStock: ""
-    });
-    setFormErrors({});
+      const res = await fetch('http://localhost:5000/api/materials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      if (res.ok) {
+        fetchMaterials();
+        setShowAddModal(false);
+        setNewMaterial({
+          code: "", name: "", category: "Material", unit: "buah", supplier: "", purchasePrice: "", markup: "", stock: "", minStock: ""
+        });
+        setFormErrors({});
+      } else {
+        alert("Gagal menyimpan material");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Terjadi kesalahan server");
+    }
   };
 
   const confirmDelete = (mat: any) => {
     setMaterialToDelete(mat);
   };
 
-  const executeDelete = () => {
+  const executeDelete = async () => {
     if (materialToDelete) {
-      setMaterialsList(materialsList.filter(m => m.id !== materialToDelete.id));
-      setMaterialToDelete(null);
+      try {
+        const res = await fetch(`http://localhost:5000/api/materials/${materialToDelete.code}`, {
+          method: 'DELETE'
+        });
+        if (res.ok) {
+          fetchMaterials();
+          setMaterialToDelete(null);
+        } else {
+          alert("Gagal menghapus material");
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Terjadi kesalahan server");
+      }
     }
   };
 
@@ -90,7 +119,7 @@ export function MasterMaterial() {
     setIsDrawerOpen(true);
   };
 
-  const handleUpdateMaterial = () => {
+  const handleUpdateMaterial = async () => {
     const errors: Record<string, string> = {};
     if (!newMaterial.code.trim()) errors.code = "Wajib diisi";
     if (!newMaterial.name.trim()) errors.name = "Wajib diisi";
@@ -101,28 +130,37 @@ export function MasterMaterial() {
       return;
     }
 
-    const updated = materialsList.map((m) => {
-      if (m.id === materialToEdit.id) {
-        return {
-          ...m,
-          code: newMaterial.code,
-          name: newMaterial.name,
-          category: newMaterial.category,
-          unit: newMaterial.unit,
-          supplier: newMaterial.supplier || "-",
-          purchasePrice: Number(newMaterial.purchasePrice) || 0,
-          markup: Number(newMaterial.markup) || 0,
-          sellingPrice: (Number(newMaterial.purchasePrice) || 0) * (1 + (Number(newMaterial.markup) || 0) / 100),
-          stock: Number(newMaterial.stock) || 0,
-          minStock: Number(newMaterial.minStock) || 0,
-        };
-      }
-      return m;
-    });
+    try {
+      const payload = {
+        code: newMaterial.code,
+        name: newMaterial.name,
+        category: newMaterial.category,
+        unit: newMaterial.unit,
+        supplier: newMaterial.supplier || "-",
+        purchasePrice: Number(newMaterial.purchasePrice) || 0,
+        markup: Number(newMaterial.markup) || 0,
+        sellingPrice: (Number(newMaterial.purchasePrice) || 0) * (1 + (Number(newMaterial.markup) || 0) / 100),
+        stock: Number(newMaterial.stock) || 0,
+        minStock: Number(newMaterial.minStock) || 0,
+      };
 
-    setMaterialsList(updated);
-    setIsDrawerOpen(false);
-    setTimeout(() => setMaterialToEdit(null), 300); // Wait for animation
+      const res = await fetch(`http://localhost:5000/api/materials/${materialToEdit.code}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      if (res.ok) {
+        fetchMaterials();
+        setIsDrawerOpen(false);
+        setTimeout(() => setMaterialToEdit(null), 300);
+      } else {
+        alert("Gagal memperbarui material");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Terjadi kesalahan server");
+    }
   };
 
   const handleExport = () => {

@@ -156,11 +156,12 @@ app.post('/api/reset-password', async (req, res) => {
 app.get('/api/projects', async (req, res) => {
   try {
     const query = `
-      SELECT p.id as db_id, p.code as id, p.name, c.name as customer, c.company, p.project_type as type, 
+      SELECT p.id as db_id, p.code as id, p.name, c.name as customer, c.company, c.email, c.phone, p.project_type as type, 
              u.name as pm, p.contract_value as contractValue, p.contract_value as budget, 
              p.down_payment as dp, p.status, p.deadline_date as deadline, p.start_date as startDate,
              p.floor_count as floors, p.building_area as area, p.material_class as materialClass,
-             p.worker_system as laborType
+             p.worker_system as laborType, p.project_address as location, p.land_condition as locationCondition,
+             p.payment_scheme, p.scopes, p.uploaded_files
       FROM projects p
       LEFT JOIN customers c ON p.customer_id = c.id
       LEFT JOIN users u ON p.manager_id = u.id
@@ -169,10 +170,28 @@ app.get('/api/projects', async (req, res) => {
     
     // Map status from db to frontend expected
     const formattedRows = rows.map(r => {
-      let st = 'on-track';
-      if(r.status === 'Paused') st = 'delayed';
+      let st = 'Planning';
+      if(r.status === 'Running') st = 'active';
+      if(r.status === 'Paused') st = 'On Hold';
       if(r.status === 'Completed') st = 'completed';
-      return { ...r, status: st, progress: Math.floor(Math.random() * 100) }; // Random progress since it's not stored yet
+      
+      const formatDate = (d) => {
+        if (!d) return '';
+        const date = new Date(d);
+        const pad = (n) => n.toString().padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+      };
+
+      return { 
+        ...r, 
+        status: st, 
+        progress: Math.floor(Math.random() * 100),
+        startDate: formatDate(r.startDate),
+        deadline: formatDate(r.deadline),
+        paymentScheme: r.payment_scheme ? JSON.parse(r.payment_scheme) : [],
+        scopes: r.scopes ? JSON.parse(r.scopes) : [],
+        uploadedFiles: r.uploaded_files ? JSON.parse(r.uploaded_files) : {}
+      };
     });
     
     res.json(formattedRows);
@@ -182,11 +201,171 @@ app.get('/api/projects', async (req, res) => {
   }
 });
 
+// POST Project
+app.post('/api/projects', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const data = req.body;
+    
+    // Generate Code
+    const code = `PRJ-${Math.floor(1000 + Math.random() * 9000)}`;
+    
+    // Handle Customer
+    let customerId = 1; // Default fallback
+    if (data.customer) {
+      const [customers] = await connection.query('SELECT id FROM customers WHERE name = ?', [data.customer]);
+      if (customers.length > 0) {
+        customerId = customers[0].id;
+        if (data.email || data.phone) {
+          await connection.query('UPDATE customers SET email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?', [data.email || null, data.phone || null, customerId]);
+        }
+      } else {
+        const [res] = await connection.query('INSERT INTO customers (name, company, email, phone) VALUES (?, ?, ?, ?)', [data.customer, data.company || '', data.email || '', data.phone || '']);
+        customerId = res.insertId;
+      }
+    }
+    
+    // Handle PM (Manager)
+    let managerId = 5; // Default PM (Agus)
+    if (data.pm) {
+      const [users] = await connection.query('SELECT id FROM users WHERE name = ?', [data.pm]);
+      if (users.length > 0) managerId = users[0].id;
+    }
+
+    // Insert Project
+    const query = `
+      INSERT INTO projects (
+        uuid, code, name, customer_id, manager_id, project_type, contract_value, 
+        down_payment, status, deadline_date, start_date, floor_count, 
+        building_area, material_class, worker_system, land_condition, project_address,
+        payment_scheme, scopes, uploaded_files
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    
+    let dbStatus = 'Planning';
+    if(data.status === 'active') dbStatus = 'Running';
+    else if(data.status === 'On Hold') dbStatus = 'Paused';
+
+    await connection.query(query, [
+      crypto.randomUUID(),
+      code,
+      data.name || 'Proyek Baru',
+      customerId,
+      managerId,
+      data.type || 'Commercial',
+      data.contractValue || 0,
+      data.dp || 0,
+      dbStatus,
+      data.deadline || null,
+      data.startDate || null,
+      data.floors || 1,
+      data.area || 0,
+      data.materialClass || 'Standard',
+      data.laborType || 'Contract',
+      data.locationCondition || 'Empty',
+      data.location || '',
+      JSON.stringify(data.paymentScheme || []),
+      JSON.stringify(data.scopes || []),
+      JSON.stringify(data.uploadedFiles || {})
+    ]);
+    
+    await connection.commit();
+    res.json({ success: true, message: 'Project created successfully', code });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT Project
+app.put('/api/projects/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params; // this is the code (e.g. PRJ-XXX)
+    const data = req.body;
+    
+    // Verify project exists
+    const [projs] = await connection.query('SELECT id FROM projects WHERE code = ?', [id]);
+    if (projs.length === 0) return res.status(404).json({ message: 'Project not found' });
+    const projectId = projs[0].id;
+
+    // Handle Customer
+    let customerId = null;
+    if (data.customer) {
+      const [customers] = await connection.query('SELECT id FROM customers WHERE name = ?', [data.customer]);
+      if (customers.length > 0) {
+        customerId = customers[0].id;
+        if (data.email || data.phone) {
+          await connection.query('UPDATE customers SET email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?', [data.email || null, data.phone || null, customerId]);
+        }
+      } else {
+        const [insertRes] = await connection.query('INSERT INTO customers (name, company, email, phone) VALUES (?, ?, ?, ?)', [data.customer, data.company || '', data.email || '', data.phone || '']);
+        customerId = insertRes.insertId;
+      }
+    }
+    
+    // Handle PM (Manager)
+    let managerId = null;
+    if (data.pm) {
+      const [users] = await connection.query('SELECT id FROM users WHERE name = ?', [data.pm]);
+      if (users.length > 0) managerId = users[0].id;
+    }
+
+    let dbStatus = 'Planning';
+    if(data.status === 'active') dbStatus = 'Running';
+    else if(data.status === 'On Hold') dbStatus = 'Paused';
+    else if(data.status === 'completed') dbStatus = 'Completed';
+    else if(data.status === 'delayed') dbStatus = 'Paused';
+
+    const updates = [];
+    const values = [];
+
+    if(data.name) { updates.push('name = ?'); values.push(data.name); }
+    if(customerId) { updates.push('customer_id = ?'); values.push(customerId); }
+    if(managerId) { updates.push('manager_id = ?'); values.push(managerId); }
+    if(data.type) { updates.push('project_type = ?'); values.push(data.type); }
+    if(data.contractValue !== undefined) { updates.push('contract_value = ?'); values.push(data.contractValue); }
+    if(data.dp !== undefined) { updates.push('down_payment = ?'); values.push(data.dp); }
+    if(dbStatus) { updates.push('status = ?'); values.push(dbStatus); }
+    if(data.deadline) { updates.push('deadline_date = ?'); values.push(data.deadline); }
+    if(data.startDate) { updates.push('start_date = ?'); values.push(data.startDate); }
+    if(data.floors !== undefined) { updates.push('floor_count = ?'); values.push(data.floors); }
+    if(data.area !== undefined) { updates.push('building_area = ?'); values.push(data.area); }
+    if(data.materialClass) { updates.push('material_class = ?'); values.push(data.materialClass); }
+    if(data.laborType) { updates.push('worker_system = ?'); values.push(data.laborType); }
+    if(data.locationCondition) { updates.push('land_condition = ?'); values.push(data.locationCondition); }
+    if(data.location) { updates.push('project_address = ?'); values.push(data.location); }
+    if(data.paymentScheme) { updates.push('payment_scheme = ?'); values.push(JSON.stringify(data.paymentScheme)); }
+    if(data.scopes) { updates.push('scopes = ?'); values.push(JSON.stringify(data.scopes)); }
+    if(data.uploadedFiles) { updates.push('uploaded_files = ?'); values.push(JSON.stringify(data.uploadedFiles)); }
+
+    if (updates.length > 0) {
+       values.push(projectId);
+       await connection.query(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`, values);
+    }
+    
+    await connection.commit();
+    res.json({ success: true, message: 'Project updated successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
 // GET Materials
 app.get('/api/materials', async (req, res) => {
   try {
     const query = `
       SELECT m.code, m.name, c.name as category, u.code as unit, 
+             s.name as supplier,
              m.purchase_price as purchasePrice, m.selling_price as sellingPrice,
              m.current_stock as stock, m.min_stock as minStock,
              IF(m.current_stock = 0, 'out-of-stock', IF(m.current_stock <= m.min_stock, 'low-stock', 'active')) as status,
@@ -194,6 +373,7 @@ app.get('/api/materials', async (req, res) => {
       FROM materials m
       LEFT JOIN material_categories c ON m.category_id = c.id
       LEFT JOIN units u ON m.unit_id = u.id
+      LEFT JOIN suppliers s ON m.supplier_id = s.id
     `;
     const [rows] = await db.query(query);
     const formatted = rows.map(r => ({ ...r, id: r.code }));
@@ -201,6 +381,212 @@ app.get('/api/materials', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// POST Material
+app.post('/api/materials', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const data = req.body;
+    
+    let categoryId = 1;
+    if (data.category) {
+      const [cats] = await connection.query('SELECT id FROM material_categories WHERE name = ?', [data.category]);
+      if (cats.length > 0) categoryId = cats[0].id;
+      else {
+        const [insertCat] = await connection.query('INSERT INTO material_categories (name) VALUES (?)', [data.category]);
+        categoryId = insertCat.insertId;
+      }
+    }
+    
+    let unitId = 1;
+    if (data.unit) {
+      const [units] = await connection.query('SELECT id FROM units WHERE code = ? OR name = ?', [data.unit, data.unit]);
+      if (units.length > 0) unitId = units[0].id;
+      else {
+        const [insertUnit] = await connection.query('INSERT INTO units (code, name) VALUES (?, ?)', [data.unit, data.unit]);
+        unitId = insertUnit.insertId;
+      }
+    }
+
+    let supplierId = null;
+    if (data.supplier && data.supplier !== "-") {
+      const [supps] = await connection.query('SELECT id FROM suppliers WHERE name = ?', [data.supplier]);
+      if (supps.length > 0) supplierId = supps[0].id;
+      else {
+        const [insertSupp] = await connection.query('INSERT INTO suppliers (name) VALUES (?)', [data.supplier]);
+        supplierId = insertSupp.insertId;
+      }
+    }
+
+    await connection.query(`
+      INSERT INTO materials (code, name, category_id, unit_id, supplier_id, purchase_price, selling_price, current_stock, min_stock)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      data.code, 
+      data.name, 
+      categoryId, 
+      unitId, 
+      supplierId,
+      data.purchasePrice || 0, 
+      data.sellingPrice || 0, 
+      data.stock || 0,
+      data.minStock || 0
+    ]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Material created successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT Material
+app.put('/api/materials/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params;
+    const data = req.body;
+    
+    const [mats] = await connection.query('SELECT id FROM materials WHERE code = ?', [id]);
+    if (mats.length === 0) return res.status(404).json({ message: 'Material not found' });
+    const materialId = mats[0].id;
+
+    let categoryId = null;
+    if (data.category) {
+      const [cats] = await connection.query('SELECT id FROM material_categories WHERE name = ?', [data.category]);
+      if (cats.length > 0) categoryId = cats[0].id;
+      else {
+        const [insertCat] = await connection.query('INSERT INTO material_categories (name) VALUES (?)', [data.category]);
+        categoryId = insertCat.insertId;
+      }
+    }
+    
+    let unitId = null;
+    if (data.unit) {
+      const [units] = await connection.query('SELECT id FROM units WHERE code = ? OR name = ?', [data.unit, data.unit]);
+      if (units.length > 0) unitId = units[0].id;
+      else {
+        const [insertUnit] = await connection.query('INSERT INTO units (code, name) VALUES (?, ?)', [data.unit, data.unit]);
+        unitId = insertUnit.insertId;
+      }
+    }
+
+    let supplierId = null;
+    if (data.supplier && data.supplier !== "-") {
+      const [supps] = await connection.query('SELECT id FROM suppliers WHERE name = ?', [data.supplier]);
+      if (supps.length > 0) supplierId = supps[0].id;
+      else {
+        const [insertSupp] = await connection.query('INSERT INTO suppliers (name) VALUES (?)', [data.supplier]);
+        supplierId = insertSupp.insertId;
+      }
+    }
+
+    const updates = [];
+    const values = [];
+
+    if(data.code) { updates.push('code = ?'); values.push(data.code); }
+    if(data.name) { updates.push('name = ?'); values.push(data.name); }
+    if(categoryId) { updates.push('category_id = ?'); values.push(categoryId); }
+    if(unitId) { updates.push('unit_id = ?'); values.push(unitId); }
+    if(supplierId !== null) { updates.push('supplier_id = ?'); values.push(supplierId); }
+    if(data.purchasePrice !== undefined) { updates.push('purchase_price = ?'); values.push(data.purchasePrice); }
+    if(data.sellingPrice !== undefined) { updates.push('selling_price = ?'); values.push(data.sellingPrice); }
+    if(data.stock !== undefined) { updates.push('current_stock = ?'); values.push(data.stock); }
+    if(data.minStock !== undefined) { updates.push('min_stock = ?'); values.push(data.minStock); }
+
+    if (updates.length > 0) {
+       values.push(materialId);
+       await connection.query(`UPDATE materials SET ${updates.join(', ')} WHERE id = ?`, values);
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'Material updated successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// DELETE Material
+app.delete('/api/materials/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params;
+    
+    const [mats] = await connection.query('SELECT id FROM materials WHERE code = ?', [id]);
+    if (mats.length === 0) return res.status(404).json({ message: 'Material not found' });
+    const materialId = mats[0].id;
+    
+    await connection.query('DELETE FROM po_items WHERE material_id = ?', [materialId]);
+    await connection.query('DELETE FROM ahsp_materials WHERE material_id = ?', [materialId]);
+    await connection.query('DELETE FROM materials WHERE id = ?', [materialId]);
+    
+    await connection.commit();
+    res.json({ success: true, message: 'Material deleted successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// DELETE Project
+app.delete('/api/projects/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params;
+    
+    // First, find the internal ID
+    const [projs] = await connection.query('SELECT id FROM projects WHERE code = ?', [id]);
+    if (projs.length === 0) return res.status(404).json({ message: 'Project not found' });
+    const projId = projs[0].id;
+
+    // Delete child rows to prevent foreign key constraint errors
+    await connection.query('DELETE FROM media_attachments WHERE model_type = "Project" AND model_id = ?', [projId]);
+    await connection.query('DELETE FROM project_progress WHERE project_id = ?', [projId]);
+    await connection.query('DELETE FROM invoices WHERE project_id = ?', [projId]);
+    
+    // Delete rab items and rabs
+    const [rabs] = await connection.query('SELECT id FROM rabs WHERE project_id = ?', [projId]);
+    for (const rab of rabs) {
+       await connection.query('DELETE FROM rab_items WHERE rab_id = ?', [rab.id]);
+       await connection.query('DELETE FROM rab_groups WHERE rab_id = ?', [rab.id]);
+    }
+    await connection.query('DELETE FROM rabs WHERE project_id = ?', [projId]);
+
+    // Delete PO items and POs
+    const [pos] = await connection.query('SELECT id FROM purchase_orders WHERE project_id = ?', [projId]);
+    for (const po of pos) {
+       await connection.query('DELETE FROM po_items WHERE po_id = ?', [po.id]);
+    }
+    await connection.query('DELETE FROM purchase_orders WHERE project_id = ?', [projId]);
+
+    // Finally delete the project
+    await connection.query('DELETE FROM projects WHERE id = ?', [projId]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Project deleted successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
   }
 });
 
@@ -229,6 +615,70 @@ app.get('/api/invoices', async (req, res) => {
   }
 });
 
+// POST Create Invoice
+app.post('/api/invoices', async (req, res) => {
+  try {
+    const { project_id, amount, due_date } = req.body;
+    
+    // Generate Invoice Number (e.g., INV-2026-4091)
+    const year = new Date().getFullYear();
+    const randomCode = Math.floor(1000 + Math.random() * 9000);
+    const invoice_number = `INV-${year}-${randomCode}`;
+
+    await db.query(`
+      INSERT INTO invoices (project_id, invoice_number, amount, due_date, status)
+      VALUES (?, ?, ?, ?, 'Pending')
+    `, [project_id, invoice_number, amount, due_date]);
+
+    res.json({ success: true, message: 'Invoice created successfully', invoice_number });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// POST Upload Invoice Payment Proof
+app.post('/api/invoices/:id/pay', upload.single('proof'), async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params; 
+    
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    const [invs] = await connection.query('SELECT id FROM invoices WHERE invoice_number = ?', [id]);
+    if (invs.length === 0) {
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    const invId = invs[0].id;
+
+    await connection.query(`
+      INSERT INTO media_attachments (uploader_id, model_type, model_id, document_type, file_name, file_path, file_type)
+      VALUES (1, 'Invoice', ?, 'Payment Proof', ?, ?, ?)
+    `, [
+      invId, 
+      req.file.originalname, 
+      req.file.path.replace(/\\/g, '/'), 
+      req.file.mimetype
+    ]);
+
+    await connection.query('UPDATE invoices SET status = "Paid" WHERE id = ?', [invId]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Payment proof uploaded and status updated to Paid' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
 // GET Cashflow
 app.get('/api/cashflows', async (req, res) => {
   try {
@@ -248,6 +698,51 @@ app.get('/api/cashflows', async (req, res) => {
       balance = parseInt(r.income) - parseInt(r.expense);
       return { month: r.month, income: parseInt(r.income), expense: parseInt(r.expense), balance: balance };
     });
+    res.json(formatted);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// GET Recent Activities (Owner Dashboard)
+app.get('/api/activities', async (req, res) => {
+  try {
+    const query = `
+      SELECT 'invoice' as source, invoice_number as reference, created_at, status as detail 
+      FROM invoices
+      UNION ALL
+      SELECT 'purchase' as source, po_number as reference, created_at, status as detail 
+      FROM purchase_orders
+      UNION ALL
+      SELECT 'photo' as source, file_name as reference, created_at, document_type as detail 
+      FROM media_attachments WHERE model_type = 'Project'
+      ORDER BY created_at DESC
+      LIMIT 6
+    `;
+    const [rows] = await db.query(query);
+    
+    const formatted = rows.map(r => {
+       const date = new Date(r.created_at);
+       const time = date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+       
+       let event = '';
+       let type = 'info';
+       
+       if (r.source === 'invoice') {
+         event = `Invoice ${r.reference} (${r.detail}) ditambahkan`;
+         type = 'success';
+       } else if (r.source === 'purchase') {
+         event = `Purchase Request ${r.reference} berstatus ${r.detail}`;
+         type = 'warning';
+       } else if (r.source === 'photo') {
+         event = `Foto progress proyek diunggah`;
+         type = 'info';
+       }
+
+       return { time, event, type };
+    });
+    
     res.json(formatted);
   } catch (error) {
     console.error(error);
@@ -437,6 +932,346 @@ app.get('/api/ahsps', async (req, res) => {
   }
 });
 
+// POST AHSP
+app.post('/api/ahsps', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const data = req.body;
+    
+    let unitId = 1;
+    if (data.unit) {
+      const [units] = await connection.query('SELECT id FROM units WHERE code = ? OR name = ?', [data.unit, data.unit]);
+      if (units.length > 0) unitId = units[0].id;
+      else {
+        const [insertUnit] = await connection.query('INSERT INTO units (code, name) VALUES (?, ?)', [data.unit, data.unit]);
+        unitId = insertUnit.insertId;
+      }
+    }
+
+    const [insertAhsp] = await connection.query(`
+      INSERT INTO ahsps (code, name, unit_id, total_cost) VALUES (?, ?, ?, ?)
+    `, [data.code, data.name, unitId, data.unitPrice || 0]);
+    
+    const ahspId = insertAhsp.insertId;
+
+    if (data.materials && Array.isArray(data.materials)) {
+      for (const m of data.materials) {
+        let matId = null;
+        const [mats] = await connection.query('SELECT id FROM materials WHERE name = ?', [m.item]);
+        if(mats.length > 0) matId = mats[0].id;
+        else {
+           const [ins] = await connection.query('INSERT INTO materials (code, name) VALUES (?, ?)', [`MAT-${Date.now()}-${Math.floor(Math.random()*100)}`, m.item]);
+           matId = ins.insertId;
+        }
+        await connection.query('INSERT INTO ahsp_materials (ahsp_id, material_id, coefficient, subtotal) VALUES (?, ?, ?, ?)', 
+          [ahspId, matId, m.coefficient, Number(m.coefficient) * Number(m.price)]);
+      }
+    }
+
+    if (data.labor && Array.isArray(data.labor)) {
+      for (const l of data.labor) {
+        let labId = null;
+        const [labs] = await connection.query('SELECT id FROM labors WHERE position = ?', [l.item]);
+        if(labs.length > 0) labId = labs[0].id;
+        else {
+           const [ins] = await connection.query('INSERT INTO labors (code, position, daily_cost) VALUES (?, ?, ?)', [`LAB-${Date.now()}-${Math.floor(Math.random()*100)}`, l.item, l.price]);
+           labId = ins.insertId;
+        }
+        await connection.query('INSERT INTO ahsp_labors (ahsp_id, labor_id, coefficient, subtotal) VALUES (?, ?, ?, ?)', 
+          [ahspId, labId, l.coefficient, Number(l.coefficient) * Number(l.price)]);
+      }
+    }
+
+    if (data.equipment && Array.isArray(data.equipment)) {
+      for (const e of data.equipment) {
+        let eqId = null;
+        const [eqs] = await connection.query('SELECT id FROM equipments WHERE name = ?', [e.item]);
+        if(eqs.length > 0) eqId = eqs[0].id;
+        else {
+           const [ins] = await connection.query('INSERT INTO equipments (code, name, hourly_cost) VALUES (?, ?, ?)', [`EQ-${Date.now()}-${Math.floor(Math.random()*100)}`, e.item, e.price]);
+           eqId = ins.insertId;
+        }
+        await connection.query('INSERT INTO ahsp_equipments (ahsp_id, equipment_id, coefficient, subtotal) VALUES (?, ?, ?, ?)', 
+          [ahspId, eqId, e.coefficient, Number(e.coefficient) * Number(e.price)]);
+      }
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'AHSP created successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT AHSP
+app.put('/api/ahsps/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params; // this is the code
+    const data = req.body;
+    
+    const [ahsps] = await connection.query('SELECT id FROM ahsps WHERE code = ?', [id]);
+    if(ahsps.length === 0) return res.status(404).json({ message: 'AHSP not found' });
+    const ahspId = ahsps[0].id;
+
+    let unitId = null;
+    if (data.unit) {
+      const [units] = await connection.query('SELECT id FROM units WHERE code = ? OR name = ?', [data.unit, data.unit]);
+      if (units.length > 0) unitId = units[0].id;
+      else {
+        const [insertUnit] = await connection.query('INSERT INTO units (code, name) VALUES (?, ?)', [data.unit, data.unit]);
+        unitId = insertUnit.insertId;
+      }
+    }
+
+    const updates = [];
+    const values = [];
+    if(data.code) { updates.push('code = ?'); values.push(data.code); }
+    if(data.name) { updates.push('name = ?'); values.push(data.name); }
+    if(unitId) { updates.push('unit_id = ?'); values.push(unitId); }
+    if(data.unitPrice !== undefined) { updates.push('total_cost = ?'); values.push(data.unitPrice); }
+
+    if (updates.length > 0) {
+      values.push(ahspId);
+      await connection.query(`UPDATE ahsps SET ${updates.join(', ')} WHERE id = ?`, values);
+    }
+
+    await connection.query('DELETE FROM ahsp_materials WHERE ahsp_id = ?', [ahspId]);
+    await connection.query('DELETE FROM ahsp_labors WHERE ahsp_id = ?', [ahspId]);
+    await connection.query('DELETE FROM ahsp_equipments WHERE ahsp_id = ?', [ahspId]);
+
+    if (data.materials && Array.isArray(data.materials)) {
+      for (const m of data.materials) {
+        let matId = null;
+        const [mats] = await connection.query('SELECT id FROM materials WHERE name = ?', [m.item]);
+        if(mats.length > 0) matId = mats[0].id;
+        else {
+           const [ins] = await connection.query('INSERT INTO materials (code, name) VALUES (?, ?)', [`MAT-${Date.now()}-${Math.floor(Math.random()*100)}`, m.item]);
+           matId = ins.insertId;
+        }
+        await connection.query('INSERT INTO ahsp_materials (ahsp_id, material_id, coefficient, subtotal) VALUES (?, ?, ?, ?)', 
+          [ahspId, matId, m.coefficient, Number(m.coefficient) * Number(m.price)]);
+      }
+    }
+
+    if (data.labor && Array.isArray(data.labor)) {
+      for (const l of data.labor) {
+        let labId = null;
+        const [labs] = await connection.query('SELECT id FROM labors WHERE position = ?', [l.item]);
+        if(labs.length > 0) labId = labs[0].id;
+        else {
+           const [ins] = await connection.query('INSERT INTO labors (code, position, daily_cost) VALUES (?, ?, ?)', [`LAB-${Date.now()}-${Math.floor(Math.random()*100)}`, l.item, l.price]);
+           labId = ins.insertId;
+        }
+        await connection.query('INSERT INTO ahsp_labors (ahsp_id, labor_id, coefficient, subtotal) VALUES (?, ?, ?, ?)', 
+          [ahspId, labId, l.coefficient, Number(l.coefficient) * Number(l.price)]);
+      }
+    }
+
+    if (data.equipment && Array.isArray(data.equipment)) {
+      for (const e of data.equipment) {
+        let eqId = null;
+        const [eqs] = await connection.query('SELECT id FROM equipments WHERE name = ?', [e.item]);
+        if(eqs.length > 0) eqId = eqs[0].id;
+        else {
+           const [ins] = await connection.query('INSERT INTO equipments (code, name, hourly_cost) VALUES (?, ?, ?)', [`EQ-${Date.now()}-${Math.floor(Math.random()*100)}`, e.item, e.price]);
+           eqId = ins.insertId;
+        }
+        await connection.query('INSERT INTO ahsp_equipments (ahsp_id, equipment_id, coefficient, subtotal) VALUES (?, ?, ?, ?)', 
+          [ahspId, eqId, e.coefficient, Number(e.coefficient) * Number(e.price)]);
+      }
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'AHSP updated successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// DELETE AHSP
+app.delete('/api/ahsps/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params;
+    
+    const [ahsps] = await connection.query('SELECT id FROM ahsps WHERE code = ?', [id]);
+    if(ahsps.length === 0) return res.status(404).json({ message: 'AHSP not found' });
+    const ahspId = ahsps[0].id;
+
+    await connection.query('DELETE FROM ahsp_materials WHERE ahsp_id = ?', [ahspId]);
+    await connection.query('DELETE FROM ahsp_labors WHERE ahsp_id = ?', [ahspId]);
+    await connection.query('DELETE FROM ahsp_equipments WHERE ahsp_id = ?', [ahspId]);
+    await connection.query('DELETE FROM ahsps WHERE id = ?', [ahspId]);
+    
+    await connection.commit();
+    res.json({ success: true, message: 'AHSP deleted successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// --- USER MANAGEMENT ENDPOINTS ---
+
+// GET Users
+app.get('/api/users', async (req, res) => {
+  try {
+    const query = `
+      SELECT u.id, u.name, u.email, u.status, u.last_login as lastLogin, r.name as role
+      FROM users u
+      LEFT JOIN model_has_roles mhr ON u.id = mhr.model_id AND mhr.model_type = 'App\\\\Models\\\\User'
+      LEFT JOIN roles r ON mhr.role_id = r.id
+    `;
+    const [users] = await db.query(query);
+    
+    const formatted = users.map(u => ({
+      ...u,
+      id: \`USR-\${u.id.toString().padStart(3, '0')}\`,
+      db_id: u.id,
+      role: u.role ? u.role.toLowerCase() : 'pm',
+      lastLogin: u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Belum pernah login'
+    }));
+    res.json(formatted);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// POST User
+app.post('/api/users', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const data = req.body;
+    
+    const passwordHash = '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'; 
+    
+    const [insUser] = await connection.query(`
+      INSERT INTO users (name, email, password, status) VALUES (?, ?, ?, ?)
+    `, [data.name, data.email, passwordHash, data.status || 'active']);
+    
+    const userId = insUser.insertId;
+
+    if (data.role) {
+       let roleId = null;
+       const [roles] = await connection.query('SELECT id FROM roles WHERE name LIKE ?', [\`%\${data.role}%\`]);
+       if(roles.length > 0) roleId = roles[0].id;
+       else {
+         const [insRole] = await connection.query('INSERT INTO roles (name, guard_name) VALUES (?, ?)', [data.role, 'web']);
+         roleId = insRole.insertId;
+       }
+       await connection.query('INSERT INTO model_has_roles (role_id, model_type, model_id) VALUES (?, ?, ?)', [roleId, 'App\\\\Models\\\\User', userId]);
+    }
+    
+    await connection.commit();
+    res.json({ success: true, message: 'User created' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT User
+app.put('/api/users/:id', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const idParam = req.params.id;
+    const dbId = parseInt(idParam.replace('USR-', ''), 10);
+    const data = req.body;
+    
+    await connection.query('UPDATE users SET name = ?, email = ?, status = ? WHERE id = ?', 
+      [data.name, data.email, data.status, dbId]);
+      
+    if (data.role) {
+       await connection.query('DELETE FROM model_has_roles WHERE model_id = ? AND model_type = ?', [dbId, 'App\\\\Models\\\\User']);
+       let roleId = null;
+       const [roles] = await connection.query('SELECT id FROM roles WHERE name LIKE ?', [\`%\${data.role}%\`]);
+       if(roles.length > 0) roleId = roles[0].id;
+       else {
+         const [insRole] = await connection.query('INSERT INTO roles (name, guard_name) VALUES (?, ?)', [data.role, 'web']);
+         roleId = insRole.insertId;
+       }
+       await connection.query('INSERT INTO model_has_roles (role_id, model_type, model_id) VALUES (?, ?, ?)', [roleId, 'App\\\\Models\\\\User', dbId]);
+    }
+    
+    await connection.commit();
+    res.json({ success: true, message: 'User updated' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// DELETE User
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const idParam = req.params.id;
+    const dbId = parseInt(idParam.replace('USR-', ''), 10);
+    
+    await db.query('DELETE FROM model_has_roles WHERE model_id = ? AND model_type = ?', [dbId, 'App\\\\Models\\\\User']);
+    await db.query('DELETE FROM users WHERE id = ?', [dbId]);
+    
+    res.json({ success: true, message: 'User deleted' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// --- SETTINGS ENDPOINTS ---
+
+app.get('/api/settings', async (req, res) => {
+  try {
+    const [settings] = await db.query('SELECT * FROM company_settings LIMIT 1');
+    if (settings.length > 0) res.json(settings[0]);
+    else res.json({});
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+app.put('/api/settings', async (req, res) => {
+  try {
+    const data = req.body;
+    const [settings] = await db.query('SELECT id FROM company_settings LIMIT 1');
+    if (settings.length > 0) {
+      await db.query('UPDATE company_settings SET company_name = ?, npwp = ?, address = ?, email = ?, phone = ? WHERE id = ?', 
+        [data.company_name, data.npwp, data.address, data.email, data.phone, settings[0].id]);
+    } else {
+      await db.query('INSERT INTO company_settings (company_name, npwp, address, email, phone) VALUES (?, ?, ?, ?, ?)', 
+        [data.company_name, data.npwp, data.address, data.email, data.phone]);
+    }
+    res.json({ success: true, message: 'Settings updated' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
 // GET RAB
 app.get('/api/rabs', async (req, res) => {
   try {
@@ -588,23 +1423,51 @@ app.get('/api/execution/:projectId/materials', async (req, res) => {
     const { projectId } = req.params;
     const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
     if (!project[0]) return res.json([]);
+    const pId = project[0].id;
+
+    // Get planned materials from Purchase Orders
+    const [plans] = await db.query(`
+      SELECT m.id, m.name, SUM(pi.quantity) as plan
+      FROM po_items pi
+      JOIN purchase_orders po ON pi.po_id = po.id
+      JOIN materials m ON pi.material_id = m.id
+      WHERE po.project_id = ? AND po.status IN ('Approved', 'Completed')
+      GROUP BY m.id, m.name
+    `, [pId]);
 
     // Get usage from material_usages joined with daily_reports
     const [usages] = await db.query(`
-      SELECT m.name, SUM(mu.quantity_used) as used, 1000 as plan -- Mocking plan for now
+      SELECT m.id, m.name, SUM(mu.quantity_used) as used
       FROM material_usages mu
       JOIN daily_reports dr ON mu.report_id = dr.id
       JOIN materials m ON mu.material_id = m.id
       WHERE dr.project_id = ?
       GROUP BY m.id, m.name
-    `, [project[0].id]);
+    `, [pId]);
+
+    const matMap = {};
     
-    const formatted = usages.map(u => ({
-      name: u.name,
-      used: parseFloat(u.used) + ' pcs',
-      plan: u.plan + ' pcs',
-      pct: Math.min(Math.round((parseFloat(u.used) / u.plan) * 100), 100)
-    }));
+    plans.forEach(p => {
+      matMap[p.id] = { name: p.name, used: 0, plan: parseFloat(p.plan) || 0 };
+    });
+
+    usages.forEach(u => {
+      if (matMap[u.id]) {
+        matMap[u.id].used = parseFloat(u.used) || 0;
+      } else {
+        matMap[u.id] = { name: u.name, used: parseFloat(u.used) || 0, plan: 0 };
+      }
+    });
+
+    const formatted = Object.values(matMap).map(m => {
+      const planVal = m.plan > 0 ? m.plan : (m.used > 0 ? m.used : 1);
+      return {
+        name: m.name,
+        used: m.used + ' pcs',
+        plan: m.plan + ' pcs',
+        pct: Math.min(Math.round((m.used / planVal) * 100), 100)
+      };
+    });
 
     res.json(formatted);
   } catch (error) {
@@ -616,14 +1479,20 @@ app.get('/api/execution/:projectId/materials', async (req, res) => {
 app.get('/api/execution/:projectId/labor', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const [project] = await db.query('SELECT id FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
+    const [project] = await db.query('SELECT id, building_area FROM projects WHERE id = ? OR code = ? LIMIT 1', [projectId, projectId]);
     if (!project[0]) return res.json([]);
 
-    const [reports] = await db.query('SELECT worker_count FROM daily_reports WHERE project_id = ? ORDER BY report_date DESC LIMIT 1', [project[0].id]);
+    const pId = project[0].id;
+    const area = parseFloat(project[0].building_area) || 100;
+    
+    // Heuristic: 1 worker per 15 m2 of building area
+    const plannedWorkers = Math.max(Math.ceil(area / 15), 5);
+
+    const [reports] = await db.query('SELECT worker_count FROM daily_reports WHERE project_id = ? ORDER BY report_date DESC LIMIT 1', [pId]);
     const count = reports.length > 0 ? reports[0].worker_count : 0;
     
     res.json([
-      { role: "Pekerja Umum", today: count, plan: Math.max(count, 10) } // Mock plan
+      { role: "Pekerja Umum", today: count, plan: plannedWorkers }
     ]);
   } catch (error) {
     console.error(error);
@@ -688,6 +1557,30 @@ app.post('/api/execution/:projectId/photos', upload.single('photo'), async (req,
     ]);
 
     res.json({ success: true, message: 'Photo uploaded successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+app.delete('/api/execution/:projectId/photos/:photoId', async (req, res) => {
+  try {
+    const { projectId, photoId } = req.params;
+    
+    // Check if photo exists
+    const [photos] = await db.query('SELECT file_path FROM media_attachments WHERE id = ? AND model_type = "Project"', [photoId]);
+    if (photos.length === 0) return res.status(404).json({ message: 'Photo not found' });
+    
+    // Delete file from disk
+    const filePath = path.join(__dirname, photos[0].file_path);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    
+    // Delete from DB
+    await db.query('DELETE FROM media_attachments WHERE id = ?', [photoId]);
+    
+    res.json({ success: true, message: 'Photo deleted successfully' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
@@ -791,6 +1684,90 @@ app.put('/api/rabs', async (req, res) => {
     await connection.rollback();
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// POST Generate RAB (Mock AI)
+app.post('/api/rabs/generate', async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { projectId, parameters } = req.body; // projectId is the PRJ-XYZ code
+    
+    // Find internal ID
+    const [projs] = await connection.query('SELECT id, contract_value, building_area, floor_count FROM projects WHERE code = ?', [projectId]);
+    if (projs.length === 0) return res.status(404).json({ message: 'Project not found' });
+    const internalProjectId = projs[0].id;
+    const contractVal = parseFloat(projs[0].contract_value) || 120000000;
+    const buildingArea = parseFloat(projs[0].building_area) || 100;
+
+    // Soft delete/deactivate existing rabs for this project
+    await connection.query('UPDATE rabs SET is_active = 0 WHERE project_id = ?', [internalProjectId]);
+    
+    // Insert new RAB version
+    const [rabRes] = await connection.query('INSERT INTO rabs (project_id, version, grand_total, is_active) VALUES (?, 1, ?, 1)', [internalProjectId, contractVal * 0.8]);
+    const rabId = rabRes.insertId;
+
+    // Dummy Groups and Items
+    const groups = [
+      { name: "Pekerjaan Persiapan", items: [
+          { name: "Pembersihan Lahan", unit: "m2", qty: buildingArea, price: 15000 },
+          { name: "Pemasangan Bowplank", unit: "m'", qty: 50, price: 45000 }
+      ]},
+      { name: "Pekerjaan Struktur", items: [
+          { name: "Galian Tanah Pondasi", unit: "m3", qty: 45, price: 85000 },
+          { name: "Beton Bertulang K-225", unit: "m3", qty: 25, price: 1250000 },
+          { name: "Pembesian", unit: "kg", qty: 1200, price: 18500 }
+      ]},
+      { name: "Pekerjaan Arsitektur", items: [
+          { name: "Pasangan Bata Merah", unit: "m2", qty: buildingArea * 1.5, price: 135000 },
+          { name: "Plesteran & Acian", unit: "m2", qty: buildingArea * 3, price: 65000 },
+          { name: "Pengecatan Dinding", unit: "m2", qty: buildingArea * 3, price: 35000 }
+      ]}
+    ];
+
+    let groupOrder = 1;
+    for (const group of groups) {
+      const [gRes] = await connection.query('INSERT INTO rab_groups (rab_id, name, sort_order) VALUES (?, ?, ?)', [rabId, group.name, groupOrder++]);
+      const groupId = gRes.insertId;
+      
+      let itemOrder = 1;
+      for (const item of group.items) {
+        let unitId = 1;
+        const [uRes] = await connection.query('SELECT id FROM units WHERE code = ? LIMIT 1', [item.unit]);
+        if(uRes.length > 0) unitId = uRes[0].id;
+
+        const subtotal = item.qty * item.price;
+        const margin = 10;
+        const total = subtotal * (1 + margin / 100);
+
+        await connection.query(`
+          INSERT INTO rab_items (group_id, description, volume, unit_id, unit_price, subtotal, margin_percentage, total, sort_order)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [groupId, item.name, item.qty, unitId, item.price, subtotal, margin, total, itemOrder++]);
+      }
+    }
+
+    // Update grand total in rabs table
+    await connection.query(`
+      UPDATE rabs 
+      SET grand_total = (
+        SELECT COALESCE(SUM(rab_items.total), 0) 
+        FROM rab_items 
+        JOIN rab_groups ON rab_items.group_id = rab_groups.id 
+        WHERE rab_groups.rab_id = rabs.id
+      ) 
+      WHERE id = ?`, [rabId]
+    );
+
+    await connection.commit();
+    res.json({ success: true, message: 'RAB generated successfully' });
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    res.status(500).json({ message: 'Server Error generating RAB' });
   } finally {
     connection.release();
   }

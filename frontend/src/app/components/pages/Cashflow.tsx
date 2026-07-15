@@ -1,48 +1,13 @@
+import { useState, useEffect, useMemo } from "react";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
 import { TrendingUp, TrendingDown, DollarSign, CreditCard } from "lucide-react";
-import { cashflowData, formatCurrency } from "../../data/mockData";
 
-const MONTHLY_TREND = [
-  { month: "Jan", income: 5200, expense: 3800, balance: 1400 },
-  { month: "Feb", income: 6800, expense: 4200, balance: 2600 },
-  { month: "Mar", income: 8500, expense: 5100, balance: 3400 },
-  { month: "Apr", income: 7200, expense: 4800, balance: 2400 },
-  { month: "Mei", income: 9800, expense: 6200, balance: 3600 },
-  { month: "Jun", income: 8500, expense: 5200, balance: 3300 },
-  { month: "Jul", income: 12200, expense: 7800, balance: 4400 },
-  { month: "Agu", income: 9800, expense: 6500, balance: 3300 },
-  { month: "Sep", income: 15600, expense: 9200, balance: 6400 },
-  { month: "Okt", income: 18900, expense: 11500, balance: 7400 },
-  { month: "Nov", income: 14200, expense: 8800, balance: 5400 },
-  { month: "Des", income: 22500, expense: 13200, balance: 9300 },
-];
-
-const PROJECT_CASHFLOW = [
-  { project: "PRJ-001", income: 7200, expense: 3800 },
-  { project: "PRJ-002", income: 2080, expense: 950 },
-  { project: "PRJ-003", income: 9700, expense: 5200 },
-  { project: "PRJ-004", income: 3920, expense: 2100 },
-  { project: "PRJ-005", income: 6400, expense: 3200 },
-];
-
-const CATEGORY_PIE = [
-  { name: "Operasional", value: 35, color: "#2563EB" },
-  { name: "Material", value: 40, color: "#16A34A" },
-  { name: "Labor", value: 18, color: "#F59E0B" },
-  { name: "Equipment", value: 7, color: "#8B5CF6" },
-];
-
-const TRANSACTIONS = [
-  { id: "TRX-101", desc: "Terima Termin 1 Kasablanka", amount: 9_700_000_000, type: "in", date: "2024-11-10", cat: "Revenue" },
-  { id: "TRX-102", desc: "Bayar Supplier Holcim", amount: -48_750_000, type: "out", date: "2024-11-09", cat: "Material" },
-  { id: "TRX-103", desc: "Upah Tukang Bulan Nov", amount: -285_000_000, type: "out", date: "2024-11-08", cat: "Labor" },
-  { id: "TRX-104", desc: "Terima DP Villa Bali", amount: 1_040_000_000, type: "in", date: "2024-11-07", cat: "Revenue" },
-  { id: "TRX-105", desc: "Sewa Alat Berat", amount: -45_000_000, type: "out", date: "2024-11-06", cat: "Equipment" },
-  { id: "TRX-106", desc: "Biaya Operasional Kantor", amount: -12_500_000, type: "out", date: "2024-11-05", cat: "Operasional" },
-];
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(value);
+}
 
 function KpiCard({ label, value, sub, icon, color, textColor }: any) {
   return (
@@ -57,27 +22,86 @@ function KpiCard({ label, value, sub, icon, color, textColor }: any) {
   );
 }
 
+const CATEGORY_COLORS = ["#2563EB", "#16A34A", "#F59E0B", "#8B5CF6", "#EC4899"];
+
 export function Cashflow() {
-  const totalIncome = MONTHLY_TREND.reduce((s, m) => s + m.income, 0);
-  const totalExpense = MONTHLY_TREND.reduce((s, m) => s + m.expense, 0);
-  const netCash = totalIncome - totalExpense;
+  const [cashflows, setCashflows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch('http://localhost:5000/api/cashflows')
+      .then(res => res.json())
+      .then(data => setCashflows(data))
+      .catch(err => console.error(err));
+  }, []);
+
+  const processedData = useMemo(() => {
+    let totalIncome = 0;
+    let totalExpense = 0;
+    
+    const monthlyMap: Record<string, { income: number, expense: number }> = {};
+    const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+    months.forEach(m => monthlyMap[m] = { income: 0, expense: 0 });
+
+    const txs: any[] = [];
+
+    cashflows.forEach(c => {
+      const amt = Number(c.amount);
+      const isIncome = c.type === 'INCOME';
+      
+      if (isIncome) totalIncome += amt;
+      else totalExpense += amt;
+
+      const d = new Date(c.transaction_date);
+      const mName = months[d.getMonth()];
+      
+      if (mName && monthlyMap[mName]) {
+        if (isIncome) monthlyMap[mName].income += amt;
+        else monthlyMap[mName].expense += amt;
+      }
+
+      txs.push({
+        id: c.uuid || c.id,
+        desc: c.description,
+        amount: isIncome ? amt : -amt,
+        type: isIncome ? 'in' : 'out',
+        date: d.toISOString().split('T')[0],
+        cat: c.reference_type || 'Operasional'
+      });
+    });
+
+    let cumulativeBalance = 0;
+    const monthlyTrend = months.map(month => {
+      const inc = (monthlyMap[month]?.income || 0) / 1000000;
+      const exp = (monthlyMap[month]?.expense || 0) / 1000000;
+      cumulativeBalance += (inc - exp);
+      return { month, income: inc, expense: exp, balance: cumulativeBalance };
+    });
+
+    return {
+      totalIncome,
+      totalExpense,
+      netCash: totalIncome - totalExpense,
+      monthlyTrend,
+      transactions: txs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10)
+    };
+  }, [cashflows]);
 
   return (
     <div className="space-y-6" style={{ fontFamily: "Inter, sans-serif" }}>
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Cashflow Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Pemantauan arus kas perusahaan &mdash; 2024</p>
+        <p className="text-sm text-gray-500 mt-0.5">Pemantauan arus kas perusahaan</p>
       </div>
 
       {/* KPI */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Total Pemasukan" value={`Rp ${(totalIncome).toFixed(0)}jt`} sub="+15% YoY"
+        <KpiCard label="Total Pemasukan" value={formatCurrency(processedData.totalIncome)} sub=""
           icon={<TrendingUp size={18} className="text-green-600" />} color="bg-green-50" textColor="text-green-600" />
-        <KpiCard label="Total Pengeluaran" value={`Rp ${(totalExpense).toFixed(0)}jt`} sub="+8% YoY"
+        <KpiCard label="Total Pengeluaran" value={formatCurrency(processedData.totalExpense)} sub=""
           icon={<TrendingDown size={18} className="text-red-500" />} color="bg-red-50" textColor="text-red-500" />
-        <KpiCard label="Net Cashflow" value={`Rp ${(netCash).toFixed(0)}jt`} sub="+22% YoY"
+        <KpiCard label="Net Cashflow" value={formatCurrency(processedData.netCash)} sub=""
           icon={<DollarSign size={18} className="text-blue-600" />} color="bg-blue-50" textColor="text-blue-600" />
-        <KpiCard label="Saldo Akhir" value="Rp 24.6M" sub="Per Nov 2024"
+        <KpiCard label="Total Transaksi" value={cashflows.length.toString()} sub="Tercatat"
           icon={<CreditCard size={18} className="text-purple-600" />} color="bg-purple-50" textColor="text-purple-600" />
       </div>
 
@@ -86,7 +110,7 @@ export function Cashflow() {
         <div className="col-span-12 lg:col-span-8 bg-white rounded-xl border border-gray-200 p-5">
           <h2 className="text-sm font-semibold text-gray-900 mb-4">Monthly Cashflow Trend (Juta Rp)</h2>
           <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={MONTHLY_TREND}>
+            <AreaChart data={processedData.monthlyTrend}>
               <defs>
                 <linearGradient id="cfIncome" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#2563EB" stopOpacity={0.15} />
@@ -100,7 +124,7 @@ export function Cashflow() {
               <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#6B7280" }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "#6B7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}jt`} />
-              <Tooltip formatter={(v: number) => [`Rp ${v}jt`]} />
+              <Tooltip formatter={(v: number) => [`Rp ${v.toFixed(1)}jt`]} />
               <Legend />
               <Area type="monotone" dataKey="income" stroke="#2563EB" fill="url(#cfIncome)" strokeWidth={2} name="Pemasukan" />
               <Area type="monotone" dataKey="expense" stroke="#DC2626" fill="url(#cfExpense)" strokeWidth={2} name="Pengeluaran" />
@@ -109,51 +133,15 @@ export function Cashflow() {
           </ResponsiveContainer>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-xl border border-gray-200 p-5">
-          <h2 className="text-sm font-semibold text-gray-900 mb-3">Kategori Pengeluaran</h2>
-          <ResponsiveContainer width="100%" height={140}>
-            <PieChart>
-              <Pie data={CATEGORY_PIE} cx="50%" cy="50%" innerRadius={35} outerRadius={60} paddingAngle={3} dataKey="value">
-                {CATEGORY_PIE.map((entry, i) => <Cell key={i} fill={entry.color} />)}
-              </Pie>
-              <Tooltip formatter={(v) => [`${v}%`]} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="grid grid-cols-2 gap-1.5 mt-3">
-            {CATEGORY_PIE.map((item) => (
-              <div key={item.name} className="flex items-center gap-1.5 text-xs">
-                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                <span className="text-gray-600">{item.name} {item.value}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-12 gap-4">
-        {/* Project Cashflow */}
-        <div className="col-span-12 lg:col-span-7 bg-white rounded-xl border border-gray-200 p-5">
-          <h2 className="text-sm font-semibold text-gray-900 mb-4">Cashflow Per Proyek (Juta Rp)</h2>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={PROJECT_CASHFLOW}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
-              <XAxis dataKey="project" tick={{ fontSize: 11, fill: "#6B7280" }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: "#6B7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}jt`} />
-              <Tooltip formatter={(v: number) => [`Rp ${v}jt`]} />
-              <Legend />
-              <Bar dataKey="income" fill="#2563EB" name="Pemasukan" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="expense" fill="#E5E7EB" name="Pengeluaran" radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
         {/* Transaction History */}
-        <div className="col-span-12 lg:col-span-5 bg-white rounded-xl border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900">Riwayat Transaksi</h2>
+        <div className="col-span-12 lg:col-span-4 bg-white rounded-xl border border-gray-200 flex flex-col">
+          <div className="px-5 py-4 border-b border-gray-100 flex-shrink-0">
+            <h2 className="text-sm font-semibold text-gray-900">Riwayat Transaksi Terakhir</h2>
           </div>
-          <div className="divide-y divide-gray-50">
-            {TRANSACTIONS.map((trx) => (
+          <div className="divide-y divide-gray-50 flex-1 overflow-y-auto max-h-[240px]">
+            {processedData.transactions.length === 0 ? (
+              <div className="p-8 text-center text-gray-500 text-sm">Belum ada transaksi</div>
+            ) : processedData.transactions.map((trx) => (
               <div key={trx.id} className="px-5 py-3 flex items-center gap-3">
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
                   trx.type === "in" ? "bg-green-50" : "bg-red-50"

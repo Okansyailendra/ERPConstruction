@@ -1,8 +1,56 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Building2, Bell, Shield, Wallet, Save, Upload } from "lucide-react";
 
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState("company");
+  const [loading, setLoading] = useState(true);
+  
+  // Settings State
+  const [companyName, setCompanyName] = useState("");
+  const [npwp, setNpwp] = useState("");
+  const [address, setAddress] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+
+  useEffect(() => {
+    fetch('http://localhost:5000/api/settings')
+      .then(res => res.json())
+      .then(data => {
+        if(data.company_name) setCompanyName(data.company_name);
+        if(data.npwp) setNpwp(data.npwp);
+        if(data.address) setAddress(data.address);
+        if(data.email) setEmail(data.email);
+        if(data.phone) setPhone(data.phone);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error(err);
+        setLoading(false);
+      });
+  }, []);
+
+  const handleSave = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_name: companyName,
+          npwp: npwp,
+          address: address,
+          email: email,
+          phone: phone
+        })
+      });
+      if(res.ok) alert("Pengaturan berhasil disimpan");
+      else alert("Gagal menyimpan pengaturan");
+    } catch(err) {
+      console.error(err);
+      alert("Terjadi kesalahan server");
+    }
+  };
+
+  if (loading) return <div className="p-8 text-center text-gray-500">Memuat pengaturan...</div>;
 
   return (
     <div className="space-y-6 max-w-5xl" style={{ fontFamily: "Inter, sans-serif" }}>
@@ -60,23 +108,23 @@ export function SettingsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-gray-700">Nama Perusahaan</label>
-                    <input type="text" defaultValue="PT. ConstructERP Indonesia" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    <input value={companyName} onChange={e => setCompanyName(e.target.value)} type="text" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-gray-700">NPWP</label>
-                    <input type="text" defaultValue="01.234.567.8-901.000" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    <input value={npwp} onChange={e => setNpwp(e.target.value)} type="text" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
                   </div>
                   <div className="space-y-1.5 md:col-span-2">
                     <label className="text-sm font-medium text-gray-700">Alamat Lengkap</label>
-                    <textarea rows={3} defaultValue="Gedung Sudirman Lantai 12, Jl. Jend. Sudirman Kav. 50, Jakarta Selatan, 12190" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"></textarea>
+                    <textarea value={address} onChange={e => setAddress(e.target.value)} rows={3} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"></textarea>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-gray-700">Email Kontak</label>
-                    <input type="email" defaultValue="info@constructerp.id" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    <input value={email} onChange={e => setEmail(e.target.value)} type="email" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-gray-700">Nomor Telepon</label>
-                    <input type="text" defaultValue="(021) 555-0123" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    <input value={phone} onChange={e => setPhone(e.target.value)} type="text" onInput={(e) => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, ''); }} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
                   </div>
                 </div>
               </div>
@@ -124,10 +172,10 @@ export function SettingsPage() {
 
           {/* Footer Save */}
           <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 rounded-b-xl flex justify-end gap-3">
-            <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+            <button onClick={() => window.location.reload()} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
               Batal
             </button>
-            <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
+            <button onClick={handleSave} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
               <Save size={16} /> Simpan Pengaturan
             </button>
           </div>

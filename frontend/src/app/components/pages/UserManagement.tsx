@@ -1,26 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { UserRole } from "../../context/AuthContext";
-import { Plus, Search, MoreVertical, Edit2, Trash2, Mail, Shield, Circle } from "lucide-react";
+import { Plus, Search, MoreVertical, Edit2, Trash2, Mail, Shield, Circle, Save, X } from "lucide-react";
 
 interface UserData {
   id: string;
+  db_id?: number;
   name: string;
   email: string;
-  role: UserRole;
+  role: string;
   status: "active" | "inactive";
   lastLogin: string;
 }
 
-const MOCK_USERS: UserData[] = [
-  { id: "USR-001", name: "Ahmad Fauzi", email: "owner@constructerp.id", role: "owner", status: "active", lastLogin: "2026-07-07 08:30" },
-  { id: "USR-002", name: "Dewi Rahayu", email: "finance@constructerp.id", role: "finance", status: "active", lastLogin: "2026-07-06 14:15" },
-  { id: "USR-003", name: "Hendra Wijaya", email: "purchasing@constructerp.id", role: "purchasing", status: "active", lastLogin: "2026-07-07 09:10" },
-  { id: "USR-004", name: "Budi Santoso", email: "pm@constructerp.id", role: "pm", status: "active", lastLogin: "2026-07-06 17:45" },
-  { id: "USR-005", name: "Agus Salim", email: "mandor@constructerp.id", role: "mandor", status: "active", lastLogin: "2026-07-07 07:05" },
-  { id: "USR-006", name: "Sarah Amelia", email: "sarah.finance@constructerp.id", role: "finance", status: "inactive", lastLogin: "2026-06-20 11:20" },
-];
-
-const ROLE_LABELS: Record<UserRole, string> = {
+const ROLE_LABELS: Record<string, string> = {
   owner: "Owner",
   finance: "Finance Manager",
   purchasing: "Purchasing",
@@ -28,7 +20,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
   mandor: "Mandor",
 };
 
-const ROLE_COLORS: Record<UserRole, string> = {
+const ROLE_COLORS: Record<string, string> = {
   owner: "bg-purple-100 text-purple-700",
   finance: "bg-blue-100 text-blue-700",
   purchasing: "bg-amber-100 text-amber-700",
@@ -38,8 +30,97 @@ const ROLE_COLORS: Record<UserRole, string> = {
 
 export function UserManagement() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [users, setUsers] = useState<UserData[]>(MOCK_USERS);
+  const [users, setUsers] = useState<UserData[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [userToEdit, setUserToEdit] = useState<UserData | null>(null);
+
+  // Form states
+  const [formName, setFormName] = useState("");
+  const [formEmail, setFormEmail] = useState("");
+  const [formRole, setFormRole] = useState("pm");
+  const [formStatus, setFormStatus] = useState<"active" | "inactive">("active");
+
+  const fetchUsers = () => {
+    fetch('http://localhost:5000/api/users')
+      .then(res => res.json())
+      .then(data => setUsers(data))
+      .catch(err => console.error(err));
+  };
+
+  useEffect(() => {
+    fetchUsers();
+  }, []);
+
+  const openModal = (user: UserData | null = null) => {
+    if (user) {
+      setUserToEdit(user);
+      setFormName(user.name);
+      setFormEmail(user.email);
+      setFormRole(user.role);
+      setFormStatus(user.status);
+    } else {
+      setUserToEdit(null);
+      setFormName("");
+      setFormEmail("");
+      setFormRole("pm");
+      setFormStatus("active");
+    }
+    setIsAddModalOpen(true);
+  };
+
+  const handleSave = async () => {
+    if (!formName || !formEmail || !formRole) {
+      alert("Harap lengkapi semua field");
+      return;
+    }
+    const payload = {
+      name: formName,
+      email: formEmail,
+      role: formRole,
+      status: formStatus
+    };
+
+    try {
+      let res;
+      if (userToEdit) {
+        res = await fetch(`http://localhost:5000/api/users/${userToEdit.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        res = await fetch('http://localhost:5000/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      if (res.ok) {
+        fetchUsers();
+        setIsAddModalOpen(false);
+      } else {
+        alert("Gagal menyimpan pengguna");
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Terjadi kesalahan server");
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("Apakah Anda yakin ingin menghapus pengguna ini?")) return;
+    try {
+      const res = await fetch(`http://localhost:5000/api/users/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) fetchUsers();
+      else alert("Gagal menghapus pengguna");
+    } catch (error) {
+      console.error(error);
+      alert("Terjadi kesalahan server");
+    }
+  };
 
   const filteredUsers = users.filter((u) =>
     u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -55,7 +136,7 @@ export function UserManagement() {
           <p className="text-sm text-gray-500 mt-0.5">Kelola akses dan peran pengguna sistem</p>
         </div>
         <button
-          onClick={() => setIsAddModalOpen(true)}
+          onClick={() => openModal()}
           className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
         >
           <Plus size={16} /> Tambah Pengguna
@@ -75,19 +156,6 @@ export function UserManagement() {
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
             />
-          </div>
-          <div className="flex gap-2 w-full sm:w-auto">
-            <select className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 w-full sm:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="all">Semua Peran</option>
-              {Object.entries(ROLE_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
-            <select className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 w-full sm:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="all">Semua Status</option>
-              <option value="active">Aktif</option>
-              <option value="inactive">Nonaktif</option>
-            </select>
           </div>
         </div>
 
@@ -109,7 +177,7 @@ export function UserManagement() {
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-medium shadow-sm">
-                        {user.name.split(" ").map(n => n[0]).join("").substring(0, 2)}
+                        {user.name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase()}
                       </div>
                       <div>
                         <p className="font-medium text-gray-900">{user.name}</p>
@@ -120,8 +188,8 @@ export function UserManagement() {
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${ROLE_COLORS[user.role]}`}>
-                      <Shield size={12} /> {ROLE_LABELS[user.role]}
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${ROLE_COLORS[user.role] || 'bg-gray-100 text-gray-700'}`}>
+                      <Shield size={12} /> {ROLE_LABELS[user.role] || user.role.toUpperCase()}
                     </div>
                   </td>
                   <td className="px-6 py-4">
@@ -135,14 +203,11 @@ export function UserManagement() {
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      <button className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-lg hover:bg-blue-50" title="Edit">
+                      <button onClick={() => openModal(user)} className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-lg hover:bg-blue-50" title="Edit">
                         <Edit2 size={16} />
                       </button>
-                      <button className="p-1.5 text-gray-400 hover:text-red-600 transition-colors rounded-lg hover:bg-red-50" title="Hapus">
+                      <button onClick={() => handleDelete(user.id)} className="p-1.5 text-gray-400 hover:text-red-600 transition-colors rounded-lg hover:bg-red-50" title="Hapus">
                         <Trash2 size={16} />
-                      </button>
-                      <button className="p-1.5 text-gray-400 hover:text-gray-900 transition-colors rounded-lg hover:bg-gray-100">
-                        <MoreVertical size={16} />
                       </button>
                     </div>
                   </td>
@@ -160,39 +225,45 @@ export function UserManagement() {
         </div>
       </div>
 
-      {/* Add User Modal Mock */}
+      {/* Add/Edit User Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-gray-900">Tambah Pengguna Baru</h2>
-              <button onClick={() => setIsAddModalOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+              <h2 className="text-lg font-semibold text-gray-900">{userToEdit ? 'Edit Pengguna' : 'Tambah Pengguna Baru'}</h2>
+              <button onClick={() => setIsAddModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
             <div className="p-6 space-y-4">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-gray-700">Nama Lengkap</label>
-                <input type="text" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="Masukkan nama" />
+                <input value={formName} onChange={e => setFormName(e.target.value)} type="text" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="Masukkan nama" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-gray-700">Email</label>
-                <input type="email" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="email@perusahaan.com" />
+                <input value={formEmail} onChange={e => setFormEmail(e.target.value)} type="email" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="email@perusahaan.com" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-gray-700">Peran Akses</label>
-                <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
-                  <option value="">Pilih peran</option>
+                <select value={formRole} onChange={e => setFormRole(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
                   {Object.entries(ROLE_LABELS).map(([key, label]) => (
                     <option key={key} value={key}>{label}</option>
                   ))}
                 </select>
               </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-gray-700">Status</label>
+                <select value={formStatus} onChange={e => setFormStatus(e.target.value as "active"|"inactive")} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                  <option value="active">Aktif</option>
+                  <option value="inactive">Nonaktif</option>
+                </select>
+              </div>
             </div>
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
-              <button onClick={() => setIsAddModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+              <button onClick={() => setIsAddModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
                 Batal
               </button>
-              <button onClick={() => setIsAddModalOpen(false)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">
-                Simpan
+              <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 flex items-center gap-2 transition-colors">
+                <Save size={16} /> Simpan
               </button>
             </div>
           </div>

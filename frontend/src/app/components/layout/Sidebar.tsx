@@ -71,8 +71,7 @@ export function Sidebar() {
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
-            <p className="text-sm font-semibold text-gray-900 leading-tight whitespace-nowrap">ConstructERP</p>
-            <p className="text-xs text-gray-500 whitespace-nowrap">v1.0</p>
+            <p className="text-sm font-semibold text-gray-900 leading-tight whitespace-nowrap">ERP Construction</p>
           </div>
         )}
       </div>

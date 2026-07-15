@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Camera, Upload, CheckSquare, Package, Users, Wrench, Clock, ChevronDown, ChevronUp, Check, Loader2 } from "lucide-react";
+import { Camera, Upload, CheckSquare, Package, Users, Wrench, Clock, ChevronDown, ChevronUp, Check, Loader2, X, Trash2 } from "lucide-react";
 import { getStatusBadge } from "../../data/mockData";
 
 export function ProjectExecution() {
@@ -15,6 +15,9 @@ export function ProjectExecution() {
   const [photos, setPhotos] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [zoomedPhoto, setZoomedPhoto] = useState<any>(null);
+  const [photoToDelete, setPhotoToDelete] = useState<number | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Progress Form State
   const [showProgressModal, setShowProgressModal] = useState(false);
@@ -99,6 +102,27 @@ export function ProjectExecution() {
     } finally {
       setIsUploadingPhoto(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleDeletePhoto = (e: React.MouseEvent, photoId: number) => {
+    e.stopPropagation(); // Prevent opening the zoom modal
+    setPhotoToDelete(photoId);
+  };
+
+  const confirmDeletePhoto = async () => {
+    if (photoToDelete === null) return;
+    setIsDeleting(true);
+    try {
+      await fetch(`http://localhost:5000/api/execution/${selectedProjectId}/photos/${photoToDelete}`, {
+        method: "DELETE"
+      });
+      fetchData(); // Refresh data after delete
+    } catch (err) {
+      console.error("Error deleting photo", err);
+    } finally {
+      setIsDeleting(false);
+      setPhotoToDelete(null);
     }
   };
 
@@ -389,7 +413,7 @@ export function ProjectExecution() {
         ) : (
           <div className="grid grid-cols-3 gap-4">
             {photos.map((p) => (
-              <div key={p.id} className="group relative rounded-xl overflow-hidden bg-gray-100 aspect-[4/3]">
+              <div key={p.id} onClick={() => setZoomedPhoto(p)} className="cursor-pointer group relative rounded-xl overflow-hidden bg-gray-100 aspect-[4/3]">
                 {p.url ? (
                   <img src={p.url} alt={p.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                 ) : (
@@ -401,6 +425,15 @@ export function ProjectExecution() {
                 )}
                 {/* Overlay */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute top-2 right-2">
+                    <button 
+                      onClick={(e) => handleDeletePhoto(e, p.id)}
+                      className="p-1.5 bg-red-500/80 hover:bg-red-600 text-white rounded-lg backdrop-blur-sm transition-colors"
+                      title="Hapus Foto"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                   <div className="absolute bottom-3 left-3 right-3 text-white">
                     <p className="text-xs font-semibold truncate">{p.title}</p>
                     <p className="text-[10px] text-gray-300">{p.date} • {p.area}</p>
@@ -411,6 +444,63 @@ export function ProjectExecution() {
           </div>
         )}
       </div>
+
+      {/* Zoomed Photo Modal */}
+      {zoomedPhoto && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 md:p-8 backdrop-blur-sm" onClick={() => setZoomedPhoto(null)}>
+          <button onClick={() => setZoomedPhoto(null)} className="absolute top-4 right-4 text-white hover:text-gray-300 z-50">
+            <X size={32} />
+          </button>
+          <div className="relative max-w-5xl w-full max-h-full flex flex-col items-center justify-center animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
+            {zoomedPhoto.url ? (
+              <img src={zoomedPhoto.url} alt={zoomedPhoto.title} className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl" />
+            ) : (
+              <div className="w-full aspect-video flex flex-col items-center justify-center text-gray-400 bg-gray-800 rounded-lg">
+                <Camera size={64} className="mb-4 opacity-50" />
+                <p className="text-lg font-medium">No Image URL</p>
+              </div>
+            )}
+            <div className="mt-4 text-center">
+              <h3 className="text-lg font-semibold text-white">{zoomedPhoto.title}</h3>
+              <p className="text-sm text-gray-400">{zoomedPhoto.date} • {zoomedPhoto.area || 'Unknown Area'}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Photo Confirmation Modal */}
+      {photoToDelete !== null && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6 text-center">
+              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-red-600">
+                <Trash2 size={32} />
+              </div>
+              <h2 className="text-lg font-bold text-gray-900 mb-2">Hapus Foto?</h2>
+              <p className="text-sm text-gray-500 mb-6">
+                Apakah Anda yakin ingin menghapus foto ini? Tindakan ini tidak dapat dibatalkan.
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setPhotoToDelete(null)}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  Batal
+                </button>
+                <button 
+                  onClick={confirmDeletePhoto}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-70"
+                >
+                  {isDeleting && <Loader2 size={16} className="animate-spin" />}
+                  Hapus
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

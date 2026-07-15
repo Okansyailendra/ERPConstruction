@@ -1,0 +1,1 @@
+require('dotenv').config(); const db = require('./db'); async function run() { try { await db.query('ALTER TABLE users ADD COLUMN status ENUM("active", "inactive") DEFAULT "active"'); await db.query('ALTER TABLE users ADD COLUMN last_login DATETIME NULL'); console.log('Altered'); } catch(e) { console.log(e); } process.exit(0); } run();
