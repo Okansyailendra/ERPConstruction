@@ -1141,7 +1141,7 @@ app.get('/api/users', async (req, res) => {
     
     const formatted = users.map(u => ({
       ...u,
-      id: \`USR-\${u.id.toString().padStart(3, '0')}\`,
+      id: `USR-${u.id.toString().padStart(3, '0')}`,
       db_id: u.id,
       role: u.role ? u.role.toLowerCase() : 'pm',
       lastLogin: u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Belum pernah login'
@@ -1170,7 +1170,7 @@ app.post('/api/users', async (req, res) => {
 
     if (data.role) {
        let roleId = null;
-       const [roles] = await connection.query('SELECT id FROM roles WHERE name LIKE ?', [\`%\${data.role}%\`]);
+       const [roles] = await connection.query('SELECT id FROM roles WHERE name LIKE ?', [`%${data.role}%`]);
        if(roles.length > 0) roleId = roles[0].id;
        else {
          const [insRole] = await connection.query('INSERT INTO roles (name, guard_name) VALUES (?, ?)', [data.role, 'web']);
@@ -1205,7 +1205,7 @@ app.put('/api/users/:id', async (req, res) => {
     if (data.role) {
        await connection.query('DELETE FROM model_has_roles WHERE model_id = ? AND model_type = ?', [dbId, 'App\\\\Models\\\\User']);
        let roleId = null;
-       const [roles] = await connection.query('SELECT id FROM roles WHERE name LIKE ?', [\`%\${data.role}%\`]);
+       const [roles] = await connection.query('SELECT id FROM roles WHERE name LIKE ?', [`%${data.role}%`]);
        if(roles.length > 0) roleId = roles[0].id;
        else {
          const [insRole] = await connection.query('INSERT INTO roles (name, guard_name) VALUES (?, ?)', [data.role, 'web']);
